@@ -148,7 +148,8 @@
     "windMaxAgeMin": 360,
     "metarMaxAgeMin": 75,
     "metarMaxStationNm": 10,
-    "showAboveGsKt": 25
+    "showAboveGsKt": 25,
+    "surfaceWindMaxAglFt": 1000
   },
   "ifr": {
     "showCdPhone": true,

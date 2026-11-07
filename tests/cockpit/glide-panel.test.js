@@ -598,24 +598,34 @@ describe('GlidePanel live behaviour', () => {
         panel = new GlidePanel(host, KLKR);
         panel.start();
         await vi.advanceTimersByTimeAsync(0);              // runwayWind() resolved -> re-rendered
-        expect(text()).toContain('Runway: METAR KLKR 240/12G18 (18 min) · Glide: 250/14 at 6,000 ft · FIS-B');
+        // 5,014 ft above the field: winds aloft above 1,000 ft, the METAR below (Dana 2026-11-06)
+        expect(text()).toContain('Runway: METAR KLKR 240/12G18 (18 min) · Glide: 250/14 at 6,000 ft · FIS-B above 1,000 ft · METAR KLKR 240/12G18 (18 min) below');
         expect(host.querySelector('.glide-wind .glide-amber')).toBeNull();
-
-        // no winds aloft: the glide legs use the airport's METAR (surface wind), not amber
-        fisbWind = null;
+        const S = GlideInputs.settings(), ref = { lat: KLKR.lat, lon: KLKR.lon };
+        const surf = { from: 240, kt: 12, gustKt: 18, noTail: true };
+        const h = 5500 - KLKR.elev_ft, wUp = (h - 1000) / h;
+        const want = (gw) => GlideModel.plan({ airport: GlideInputs.airport(KLKR, S), ac: { ...GlideInputs.aircraft(sit, S, ref, NOW), vs: null },
+            glideWind: gw, runwayWind: { kind: 'metar', from: 240, kt: 12, gustKt: 18 } }, S).spare;
         let plan = panel.render(NOW);
-        // the METAR is both the runway and the glide wind: named once
+        expect(plan.spare).toBeCloseTo(want({ layers: [{ wind: { from: 250, kt: 14 }, w: wUp }, { wind: surf, w: 1 - wUp }] }), 6);
+
+        // no winds aloft: the assumed 10 kt above 1,000 ft (only that part amber), the METAR below
+        fisbWind = null;
+        plan = panel.render(NOW);
+        expect(text()).toContain('Runway: METAR KLKR 240/12G18 (18 min) · Glide: assumed 10 kt headwind above 1,000 ft · METAR KLKR 240/12G18 (18 min) below');
+        expect([...host.querySelectorAll('.glide-wind .glide-amber')].map((e) => e.textContent)).toEqual(['assumed 10 kt headwind above 1,000 ft']);
+        expect(plan.spare).toBeCloseTo(want({ layers: [{ wind: null, w: wUp }, { wind: surf, w: 1 - wUp }] }), 6);
+
+        // below 1,000 ft above the field: the METAR alone, named once
+        sit = situation(180, 2, 1200, 360);
+        plan = panel.render(NOW);
         expect(text()).toContain('Wind: METAR KLKR 240/12G18 (18 min) · runway and glide');
         expect(text()).not.toContain('Runway:');
         expect(text()).not.toContain('Glide:');
         expect(host.querySelector('.glide-wind .glide-amber')).toBeNull();
-        // ... and the plan really used it (the same as the model with that vector, gust kept)
-        const S = GlideInputs.settings(), ref = { lat: KLKR.lat, lon: KLKR.lon };
-        const want = (gw) => GlideModel.plan({ airport: GlideInputs.airport(KLKR, S), ac: { ...GlideInputs.aircraft(sit, S, ref, NOW), vs: null },
-            glideWind: gw, runwayWind: { kind: 'metar', from: 240, kt: 12, gustKt: 18 } }, S).spare;
-        expect(plan.spare).toBeCloseTo(want({ from: 240, kt: 12, gustKt: 18, noTail: true }), 6);
+        expect(plan.spare).toBeCloseTo(want(surf), 6);
 
-        // a VRB METAR: a headwind of its speed, labelled as the surface wind
+        // a VRB METAR below 1,000 ft: a headwind of its speed
         panel.stop();
         fisbMetar = { ...fisbMetar, raw: 'KLKR 311742Z VRB04KT', decoded: { ...fisbMetar.decoded, wind_dir: null, wind_speed: 4, wind_gust: null } };
         panel.start();

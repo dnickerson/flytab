@@ -135,6 +135,7 @@ class ConfigEditor {
             'turnBankDeg':        { type: 'number', label: 'Turn Bank Angle (deg)', min: 10, max: 60 },
             'marginFt':           { type: 'number', label: 'Safety Margin (ft)', min: 0, max: 2000, step: 50 },
             'noWindHeadwindKt':   { type: 'number', label: 'Assumed Headwind When No Wind Known (kt)', min: 0, max: 50 },
+            'surfaceWindMaxAglFt': { type: 'number', label: 'Surface Wind Used Up To (ft above field)', min: 0, max: 3000, step: 100 },
             'onCourseDeg':        { type: 'number', label: 'On-Course Tolerance (deg)', min: 1, max: 30 },
             'windMaxStationNm':   { type: 'number', label: 'Winds Aloft Max Station Distance (nm)', min: 1, max: 500, step: 5 },
             'windMaxAgeMin':      { type: 'number', label: 'Winds Aloft Max Age (min)', min: 10, max: 1440, step: 10 },

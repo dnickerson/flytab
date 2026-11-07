@@ -247,6 +247,37 @@ describe('GlideModel', () => {
             expect(aloft.spare).toBeGreaterThan(calm.spare + 20);          // a wind aloft tailwind does count
         });
 
+        it('{ layers }: ground speed = sum of w x each layer\'s own triangle; heading from the heavier layer', () => {
+            const tasL = 70;
+            const up = { from: 270, kt: 20 }, low = { headKt: 4 };
+            for (const course of [0, 90, 180, 270]) {
+                const tu = GlideModel.triangle(course, tasL, up, S()), tl = GlideModel.triangle(course, tasL, low, S());
+                const t = GlideModel.triangle(course, tasL, { layers: [{ wind: up, w: 0.3 }, { wind: low, w: 0.7 }] }, S());
+                expect(t.gs).toBeCloseTo(0.3 * tu.gs + 0.7 * tl.gs, 9);
+                expect(t.hdg).toBe(tl.hdg);                                         // the lower layer weighs more
+                const t2 = GlideModel.triangle(course, tasL, { layers: [{ wind: up, w: 0.7 }, { wind: low, w: 0.3 }] }, S());
+                expect(t2.hdg).toBe(tu.hdg);
+                expect(t2.gs).toBeCloseTo(0.7 * tu.gs + 0.3 * tl.gs, 9);
+            }
+            // each layer keeps its own rules: null = the assumed headwind, noTail, the lower gust
+            const t = GlideModel.triangle(180, tasL, { layers: [{ wind: null, w: 0.5 }, { wind: { from: 360, kt: 10, gustKt: 20, noTail: true }, w: 0.5 }] }, S());
+            expect(t.gs).toBeCloseTo(0.5 * (tasL - 10) + 0.5 * tasL, 9);
+            // a weight-0 layer is ignored; all weights 0 -> the assumed headwind
+            expect(GlideModel.triangle(0, tasL, { layers: [{ wind: up, w: 0 }, { wind: low, w: 1 }] }, S())).toEqual(GlideModel.triangle(0, tasL, low, S()));
+            expect(GlideModel.triangle(0, tasL, { layers: [] }, S()).gs).toBe(60);
+        });
+
+        it('plan() with { layers }: between the two single-wind answers; finite; the final headwind fallback is the weighted mean', () => {
+            const o = { pos: fromPolar(143, 3), alt: 2500, trk: 323, gs: 80, runwayWind: { kind: 'none' } };
+            const a = GlideModel.plan(input({ ...o, wind: null }), S());
+            const b = GlideModel.plan(input({ ...o, wind: { headKt: 4 } }), S());
+            const m = GlideModel.plan(input({ ...o, wind: { layers: [{ wind: null, w: 0.4 }, { wind: { headKt: 4 }, w: 0.6 }] } }), S());
+            expect(m.spare).toBeGreaterThan(a.spare);
+            expect(m.spare).toBeLessThan(b.spare);
+            const f = GlideModel.plan(fin({ wind: { layers: [{ wind: null, w: 0.4 }, { wind: { headKt: 4 }, w: 0.6 }] }, runwayWind: { kind: 'none' } }), S());
+            expect(f.headRwy).toBeCloseTo(0.4 * 10 + 0.6 * 4, 9);
+        });
+
         it('null keeps the assumed noWindHeadwindKt; a malformed wind is treated as null', () => {
             expect(GlideModel.triangle(90, tas, null, S()).gs).toBe(60);
             expect(GlideModel.triangle(90, tas, { from: NaN, kt: 5 }, S()).gs).toBe(60);

@@ -3,7 +3,9 @@
  * the 2026-11-06 KLKR pattern and landing (tests/fixtures/glide/20261106_klkr_pattern.csv, see its README),
  * replayed through the real GlideInputs.airport() + GlideInputs.glideWindFor() + GlideModel.plan() with the
  * real KLKR NASR record (tests/fixtures/airport-panel/nasr-airports.json) and default settings (200 ft margin).
- * Surface wind VRB 4 kt, no winds aloft (below FIS-B's lowest level).
+ * Surface wind VRB 4 kt, no winds aloft (below FIS-B's lowest level). Since Dana's 2026-11-06 rule the surface wind
+ * is used only in the lowest 1,000 ft above the field (surfaceWindMaxAglFt); above that the assumed 10 kt headwind
+ * applies, weighted by the height share (GlideInputs.glideWindFor with the row's height above the field).
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
@@ -27,7 +29,7 @@ const NONE = { wind: { kind: 'none' }, label: '' };
 const sec = (t) => { const [h, m, s] = t.split(':').map(Number); return h * 3600 + m * 60 + s; };
 /** The panel's inputs for one fixture row: position relative to the KLKR reference point (as GlideInputs.aircraft does). */
 const planAt = (r, rwy) => {
-    const gw = GlideInputs.glideWindFor(NO_ALOFT, rwy, S);
+    const gw = GlideInputs.glideWindFor(NO_ALOFT, rwy, S, r.alt - KLKR.elev_ft);
     const ac = { pos: GlideModel.toLocal(KLKR.lat, KLKR.lon, r.lat, r.lon), altMsl: r.alt, gs: r.gs, trkTrue: r.trk, vs: null };
     return { gw, plan: GlideModel.plan({ airport: APT, ac, glideWind: gw.wind, runwayWind: rwy.wind }, S) };
 };
@@ -46,8 +48,15 @@ describe('KLKR 2026-11-06 pattern, VRB 04, 200 ft margin', () => {
     });
 
     it('the VRB 04 METAR becomes a 4 kt headwind on every course, labelled as the surface wind (not amber)', () => {
-        const gw = GlideInputs.glideWindFor(NO_ALOFT, VRB04, S);
-        expect(gw).toEqual({ wind: { headKt: 4 }, label: 'METAR KLKR VRB/04 (8 min) · surface', assumed: false, source: 'surface' });
+        // at or below 1,000 ft above the field: the METAR only
+        const gw = GlideInputs.glideWindFor(NO_ALOFT, VRB04, S, 569);
+        expect(gw).toEqual({ wind: { headKt: 4 }, label: 'METAR KLKR VRB/04 (8 min) · surface', assumed: false, source: 'surface',
+            parts: [{ text: 'METAR KLKR VRB/04 (8 min) · surface', amber: false }] });
+        // on the downwind (1,146 ft at 20:03:10): the assumed 10 kt above 1,000 ft (amber part), VRB 04 below
+        const dw = GlideInputs.glideWindFor(NO_ALOFT, VRB04, S, 1146);
+        expect(dw.wind).toEqual({ layers: [{ wind: null, w: 146 / 1146 }, { wind: { headKt: 4 }, w: 1000 / 1146 }] });
+        expect(dw.label).toBe('assumed 10 kt headwind above 1,000 ft · METAR KLKR VRB/04 (8 min) below');
+        expect(dw.assumed).toBe(true);
     });
 
     it('downwind 20:02:11-20:03:10: GLIDE OK (direct, spare >= 0) on every row', () => {
@@ -104,7 +113,8 @@ describe('the same flight with no METAR and no winds aloft: the assumed 10 kt he
     it('the wind is assumed (amber label) and the last downwind row 20:03:10 is CANNOT REACH', () => {
         const r = nearest('20:03:10');
         const { gw, plan } = planAt(r, NONE);
-        expect(gw).toEqual({ wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', assumed: true, source: 'assumed' });
+        expect(gw).toEqual({ wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', assumed: true, source: 'assumed',
+            parts: [{ text: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', amber: true }] });
         expect(plan.kind).toBe('direct');
         expect(plan.spare).toBeLessThan(0);
         // and it is the wind that decides: with VRB 04 the same row is GLIDE OK
@@ -123,12 +133,12 @@ describe('the critical review probes on the real KLKR record (VRB 04)', () => {
         const r = (BRG + 90) * Math.PI / 180, l = latFt / FT;
         return { x: A.x + k * (B.x - A.x) + l * Math.sin(r), y: A.y + k * (B.y - A.y) + l * Math.cos(r) };
     };
-    const gw = GlideInputs.glideWindFor(NO_ALOFT, VRB04, S);
     const P = (pos, agl, trk, gs) => GlideModel.plan({ airport: APT,
-        ac: { pos, altMsl: KLKR.elev_ft + agl, gs, trkTrue: trk, vs: null }, glideWind: gw.wind, runwayWind: VRB04.wind }, S);
+        ac: { pos, altMsl: KLKR.elev_ft + agl, gs, trkTrue: trk, vs: null },
+        glideWind: GlideInputs.glideWindFor(NO_ALOFT, VRB04, S, agl).wind, runwayWind: VRB04.wind }, S);
     const zeroLeg = (p) => p.legNm === 0 && p.turnNow === 0;
 
-    it('climbout over the 24 end (track 059, k 0.999) at 600 / 1,000 ft: a turn back like one second later off the end', () => {
+    it('climbout over the 24 end (track 059, k 0.999) at 600 / 1,000 ft: a turn back to the 06 end, never better than off the end', () => {
         for (const agl of [600, 1000]) {
             const on = P(at(0.999), agl, 59, 80), off = P(at(1.001), agl, 59, 80);
             expect(on.kind).toBe('direct');

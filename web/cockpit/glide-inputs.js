@@ -9,8 +9,8 @@
  *   glideWind()  winds aloft at the aircraft: FIS-B, else the route planner's downloaded winds
  *   runwayWind() the wind to land in: the airport's METAR (FIS-B, else the panel's internet one, else the cached
  *                one), else the nearest station
- *   glideWindFor() the wind the glide legs use: winds aloft, else the runway (surface) wind, else none (the
- *                assumed headwind) - spec 2026-11-06 decision 2
+ *   glideWindFor() the wind the glide legs use, in two layers split at surfaceWindMaxAglFt above the field: winds
+ *                aloft (else the assumed headwind) above, the runway (surface) wind below - spec 2026-11-06
  *
  * Only data already on the tablet is read; nothing here touches the network (no internet in flight).
  * Every missing or untrusted input takes the more conservative path: a missing wind is `null` / 'none'
@@ -101,6 +101,7 @@ const GlideInputs = (() => {
             metarMaxAgeMin: [10, 240, 'lower'],
             metarMaxStationNm: [0, 100, 'lower'],
             showAboveGsKt: [0, 200],
+            surfaceWindMaxAglFt: [0, 3000, 'lower'],   // Dana 2026-11-06: the ground wind only up to 1,000 ft at most
         },
     };
 
@@ -510,35 +511,65 @@ const GlideInputs = (() => {
         return none;
     }
 
-    // ---- The glide wind (spec 2026-11-06, decision 2) -------------------------
+    // ---- The glide wind (spec 2026-11-06: decision 2, "Surface wind only in the lowest 1,000 ft") ---------
 
-    /**
-     * The wind the glide legs use, from a glideWind() result (`aloft`) and a runwayWind() result (`runway`):
-     *   1. winds aloft when there are any:           aloft.wind, aloft.label (e.g. "250/14 at 3,000 ft · FIS-B")
-     *   2. else the runway (surface) wind:            METAR { from, kt, gustKt, noTail: true } (no tailwind credit);
-     *      VRB n (gust g) ->
-     *      { headKt: max(n, g) }; calm -> { headKt: 0 }; label "<runway label> · surface"
-     *      (e.g. "METAR KLKR VRB/04 (8 min) · surface")
-     *   3. else null: the model assumes noWindHeadwindKt on every course;
-     *      label "NO CURRENT WINDS ALOFT · 10 kt headwind assumed", assumed true.
-     * -> { wind: null | { from, kt, gustKt?, noTail? } | { headKt }, label, assumed, source: 'aloft'|'surface'|'assumed' }
-     */
-    function glideWindFor(aloft, runway, settings_) {
-        if (aloft && aloft.wind && isNum(aloft.wind.from) && isNum(aloft.wind.kt)) {
-            return { wind: aloft.wind, label: String(aloft.label || ''), assumed: false, source: 'aloft' };
-        }
+    /** The runway (surface) wind as a model glide wind, or null when there is none. */
+    function surfaceGlideWind(runway) {
         const w = runway && runway.wind;
-        const surface = (wind) => ({ wind, label: `${runway.label || 'surface wind'} · surface`, assumed: false, source: 'surface' });
+        // noTail: a surface wind never helps the glide (a tailwind component counts as 0; spec 2026-11-06 review)
         if (w && w.kind === 'metar' && isNum(w.from) && isNum(w.kt)) {
-            // noTail: a surface wind never helps the glide (a tailwind component counts as 0; spec 2026-11-06 review)
-            return surface({ from: w.from, kt: w.kt, gustKt: isNum(w.gustKt) ? w.gustKt : null, noTail: true });
+            return { from: w.from, kt: w.kt, gustKt: isNum(w.gustKt) ? w.gustKt : null, noTail: true };
         }
         if (w && w.kind === 'vrb') {
             const kts = [w.kt, w.gustKt].filter(isNum);
-            if (kts.length) return surface({ headKt: Math.max(...kts) });
+            if (kts.length) return { headKt: Math.max(...kts) };
         }
-        if (w && w.kind === 'calm') return surface({ headKt: 0 });
-        return { wind: null, label: assumedLabel(validate(settings_)), assumed: true, source: 'assumed' };
+        if (w && w.kind === 'calm') return { headKt: 0 };
+        return null;
+    }
+
+    /**
+     * The wind the glide legs use: two layers split at L = surfaceWindMaxAglFt above the field.
+     *   upper (above L): the winds aloft (`aloft`, a glideWind() result) when trusted, else none (the assumed
+     *                    noWindHeadwindKt headwind);
+     *   lower (below L): the runway (surface) wind (`runway`, a runwayWind() result: METAR { from, kt, gustKt,
+     *                    noTail: true }, VRB n (gust g) -> { headKt: max(n, g) }, calm -> { headKt: 0 }), else the
+     *                    upper layer's wind.
+     * Weights from `hAglFt`, the aircraft's current height above the field: wUp = max(0, h - L) / h, wLow = 1 - wUp
+     * (h <= L or h <= 0: lower only; h unknown: upper only).
+     * -> { wind, label, assumed, source, parts }
+     *   wind    one layer: that wind (null | vector | { headKt }); two: { layers: [{ wind: upper, w: wUp },
+     *           { wind: lower, w: wLow }] } (the shape GlideModel.plan takes)
+     *   label   one layer: the aloft label ("250/14 at 3,000 ft · FIS-B"), "<runway label> · surface", or
+     *           "NO CURRENT WINDS ALOFT · 10 kt headwind assumed"; two: "<aloft label> above 1,000 ft · <runway label>
+     *           below" or "assumed 10 kt headwind above 1,000 ft · <runway label> below"
+     *   assumed true when the assumed headwind is used (it has weight > 0)
+     *   source  'aloft' | 'surface' | 'assumed' (one layer) | 'layered'
+     *   parts   [{ text, amber }]: the label's parts, amber = the assumed part (the panel colours only that part)
+     */
+    function glideWindFor(aloft, runway, settings_, hAglFt) {
+        const S = validate(settings_);
+        const L = S.pilot.surfaceWindMaxAglFt;
+        const aloftOk = !!(aloft && aloft.wind && isNum(aloft.wind.from) && isNum(aloft.wind.kt));
+        const low = surfaceGlideWind(runway);
+        const h = isNum(hAglFt) ? hAglFt : Infinity;
+        const wUp = h === Infinity ? 1 : (h > 0 && h > L ? (h - L) / h : 0);
+        const one = (wind, label, assumed, source) => ({ wind, label, assumed, source, parts: [{ text: label, amber: assumed }] });
+        const upperOnly = () => (aloftOk ? one(aloft.wind, String(aloft.label || ''), false, 'aloft')
+            : one(null, assumedLabel(S), true, 'assumed'));
+        if (!low || wUp >= 1) return upperOnly();              // no surface wind (lower = upper), or above it all
+        const rwyLabel = String((runway && runway.label) || 'surface wind');
+        if (wUp <= 0) return one(low, `${rwyLabel} · surface`, false, 'surface');
+        const above = `above ${fmtFt(L)} ft`;
+        const upText = aloftOk ? `${String(aloft.label || '')} ${above}` : `assumed ${fmtFt(S.pilot.noWindHeadwindKt)} kt headwind ${above}`;
+        const lowText = `${rwyLabel} below`;
+        return {
+            wind: { layers: [{ wind: aloftOk ? aloft.wind : null, w: wUp }, { wind: low, w: 1 - wUp }] },
+            label: `${upText} · ${lowText}`,
+            assumed: !aloftOk,
+            source: 'layered',
+            parts: [{ text: upText, amber: !aloftOk }, { text: lowText, amber: false }],
+        };
     }
 
     return {

@@ -147,8 +147,10 @@ class GlidePanel {
         // fills GPSVerticalSpeed (WebSocket 0), GDL 90 sends none, the engine-GPS bridge sends 0.
         ac.vs = this._measuredVs(sit.timestamp, ac.altMsl);
 
-        // Glide wind: winds aloft, else the runway (surface) wind, else none (the assumed headwind).
-        const gw = GlideInputs.glideWindFor(GlideInputs.glideWind(sit.lat, sit.lon, ac.altMsl, S, now), this._rwy, S);
+        // Glide wind in two layers split at surfaceWindMaxAglFt above the field: winds aloft (else the assumed
+        // headwind) above, the runway (surface) wind below, weighted by the current height above the field.
+        const gw = GlideInputs.glideWindFor(GlideInputs.glideWind(sit.lat, sit.lon, ac.altMsl, S, now), this._rwy, S,
+            ac.altMsl - apt.elevFt);
         const plan = GlideModel.plan({ airport: apt, ac, glideWind: gw.wind, runwayWind: this._rwy.wind }, S);
         const nums = [plan.spare, plan.needMsl, plan.hdgTrue, plan.legNm, plan.target, plan.projected,
             plan.targetNow, plan.turnNow];
@@ -202,7 +204,7 @@ class GlidePanel {
      *   GLIDE PATH  the signed spare (+N / −N ft)
      * and the wind line ("Glide:" amber only when the headwind is assumed; the tailwind line only on final).
      * N in the verdict and GLIDE PATH: spare floored when >= 0, shortfall ceiled.
-     * `gw`: GlideInputs.glideWindFor() result { wind, label, assumed }.
+     * `gw`: GlideInputs.glideWindFor() result { wind, label, assumed, source, parts } (only an assumed part is amber).
      */
     _view(plan, sit, gw) {
         const S = this._S, apt = this._apt;
@@ -288,7 +290,11 @@ class GlidePanel {
             // The airport's METAR is both the runway wind and the glide wind: name it once.
             wind = `<span>Wind: ${rwyLabel} · runway and glide</span>`;
         } else {
-            const glideLabel = `<span class="${gw.assumed ? 'glide-amber' : ''}">Glide: ${esc(gw.label)}</span>`;
+            const parts = Array.isArray(gw.parts) && gw.parts.length ? gw.parts : [{ text: gw.label, amber: !!gw.assumed }];
+            // One part: "Glide: <text>" in one span (amber when assumed). Two layers: only the assumed part is amber.
+            const glideLabel = parts.length === 1
+                ? `<span class="${parts[0].amber ? 'glide-amber' : ''}">Glide: ${esc(parts[0].text)}</span>`
+                : '<span>Glide:</span> ' + parts.map((pt) => `<span class="${pt.amber ? 'glide-amber' : ''}">${esc(pt.text)}</span>`).join(' · ');
             wind = (rwyLabel ? `<span>Runway: ${rwyLabel}</span> · ` : '') + glideLabel;
         }
         if (plan.kind === 'final' && plan.tailwindKt > 0) {

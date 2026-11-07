@@ -76,6 +76,7 @@ const GlideModel = (() => {
             metarMaxStationNm: 10,
             windMaxAgeMin: 360,
             showAboveGsKt: 25,
+            surfaceWindMaxAglFt: 1000,  // the surface (METAR) wind is used only in the lowest this-many ft above the field
         }),
     });
 
@@ -125,7 +126,24 @@ const GlideModel = (() => {
         return { hdg: norm(courseT + wca), gs: Math.max(tasKt * Math.cos(rad(wca)) - head, MIN_GS_KT), wca };
     }
 
+    /** { layers: [{ wind, w }, ...] }: the two-layer glide wind (upper first), weights w summing to 1. */
+    const isLayered = (w) => !!w && Array.isArray(w.layers);
+    /** The layers that count (weight > 0). */
+    const liveLayers = (w) => w.layers.filter((l) => l && Number.isFinite(l.w) && l.w > 0);
+
     function triangleR(R, courseT, tasKt, wind) {
+        if (isLayered(wind)) {
+            // Two layers (spec 2026-11-06 "Surface wind only in the lowest 1,000 ft"): ground speed = the weighted
+            // sum of each layer's own triangle; heading from the layer with the larger weight (the upper on a tie).
+            let gs = 0, heavy = null;
+            for (const l of liveLayers(wind)) {
+                const t = triangleR(R, courseT, tasKt, l.wind);
+                gs += l.w * t.gs;
+                if (!heavy || l.w > heavy.w) heavy = { w: l.w, t };
+            }
+            if (!heavy) return triangleR(R, courseT, tasKt, null);
+            return { hdg: heavy.t.hdg, gs: Math.max(gs, MIN_GS_KT), wca: heavy.t.wca };
+        }
         if (isHeadWind(wind)) return { hdg: courseT, gs: Math.max(tasKt - wind.headKt, MIN_GS_KT), wca: 0 };
         if (!isVecWind(wind)) return { hdg: courseT, gs: Math.max(tasKt - R.noWindHeadKt, MIN_GS_KT), wca: 0 };
         // With a gust: solved with the steady and the gust speed, the LOWER ground speed (and its heading) is used.
@@ -144,6 +162,7 @@ const GlideModel = (() => {
      * and with a gust the faster of the steady / gust solutions is used.
      */
     function floatGsR(courseT, tasKt, wind) {
+        if (isLayered(wind)) return Math.max(tasKt, ...liveLayers(wind).map((l) => floatGsR(courseT, tasKt, l.wind)));
         let gs = tasKt;
         if (isVecWind(wind)) {
             for (const kt of vecSpeeds(wind)) gs = Math.max(gs, solve(courseT, tasKt, wind.from, kt, false).gs);
@@ -154,7 +173,8 @@ const GlideModel = (() => {
     /**
      * Wind triangle. wind = { from, kt, gustKt?, noTail? } (with a gust: solved with kt and with the gust, the lower
      * ground speed wins; noTail: a tailwind component counts as 0 - a surface METAR wind never helps), { headKt }
-     * (that headwind on every course), or null (no wind data: the assumed noWindHeadwindKt headwind).
+     * (that headwind on every course), null (no wind data: the assumed noWindHeadwindKt headwind), or
+     * { layers: [{ wind, w }, ...] } (weighted ground speed, heading of the heavier layer).
      * -> { hdg, gs, wca }
      */
     function triangle(courseT, tasKt, wind, settings) {
@@ -202,6 +222,12 @@ const GlideModel = (() => {
             const kts = [rw.kt, rw.gustKt].filter(Number.isFinite);
             return kts.length ? Math.max(...kts) : R.noWindHeadKt;
         }
+        if (isLayered(glideWind)) {
+            const live = liveLayers(glideWind);
+            const sumW = live.reduce((t, l) => t + l.w, 0);
+            if (sumW > 0) return live.reduce((t, l) => t + l.w * runwayHead(R, { kind: 'none' }, l.wind, hdg), 0) / sumW;
+            return R.noWindHeadKt;
+        }
         if (isHeadWind(glideWind)) return glideWind.headKt;
         if (isVecWind(glideWind)) {
             // err high: the larger headwind / smaller tailwind of the steady and gust speeds
@@ -240,7 +266,9 @@ const GlideModel = (() => {
      * input = { airport: { elevFt, ref: {x,y},
      *                      ends: [{ id, runwayId, thr, phys, elevFt, hdgTrue, rwyLenFt, mid, widthFt, rwy: {a, b} }] },
      *           ac: { pos, altMsl, gs, trkTrue, vs },
-     *           glideWind: null | { from, kt, gustKt? } | { headKt },
+     *           glideWind: null | { from, kt, gustKt?, noTail? } | { headKt }
+     *                      | { layers: [{ wind, w }, { wind, w }] } (two layers, upper first: each `wind` one of the
+     *                        shapes above, `w` its weight, summing to 1 - GlideInputs.glideWindFor builds it),
      *           runwayWind: {kind:'metar',from,kt,gustKt}|{kind:'calm'}|{kind:'vrb',kt,gustKt}|{kind:'none'},
      *           preferDirect: accepted and ignored (spec 2026-11-06) }
      * -> { kind: 'over'|'final'|'direct'|'ref', endId, runwayId, pt, needMsl, spare, hdgTrue, legNm, tMin, target,
@@ -270,7 +298,9 @@ const GlideModel = (() => {
      *   'ref'    no runway segment: the same to the airport reference point.
      * Glide wind: null -> the assumed noWindHeadwindKt headwind on every course; { headKt } -> that headwind on
      * every course; { from, kt, gustKt, noTail } -> wind triangle (triangleR: the lower ground speed of steady /
-     * gust; noTail: no tailwind credit).
+     * gust; noTail: no tailwind credit); { layers } -> ground speed = sum of w x each layer's ground speed, heading
+     * from the heavier layer (the upper on a tie). The runway headwind fallback (runwayWind 'none') takes the
+     * weighted mean of the layers' components; needAheadFt the most conservative layer.
      *
      * endId: the chosen end's id ('final'), 'both' for a runway segment ('over' / 'direct'), null for 'ref'.
      * runwayId: the runway of that end / segment, e.g. '06/24'; null for 'ref' or an end without runwayId.
