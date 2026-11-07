@@ -276,17 +276,27 @@ describe('GlidePanel verdicts', () => {
         expect(host.querySelector('.glide-verdict').textContent).toBe('✓ OVER RWY 06/24');
     });
 
-    it('high over the runway: GLIDE OK to the runway under the aircraft, no turn, 0.0 nm (no phantom turn)', () => {
-        sit = overRwy(0.5, 486 + 1500, 150);
+    it('high pass lined up with the runway ahead: GLIDE OK, no turn, 0.0 nm; crossing it: the turn back to the mid-point', () => {
+        // 300 ft above the field near the 06 end, tracking 059: ~5,700 ft of runway ahead, the glide needs ~3,800
+        sit = overRwy(0.05, 486 + 300, 59, { ground_speed: 80 });
         panel = new GlidePanel(host, KLKR);
         panel.start();
-        const plan = panel.render(NOW);
+        let plan = panel.render(NOW);
         expect(plan.kind).toBe('direct');
-        expect(plan.spare).toBeCloseTo(1500 - 200, 6);
-        expect(text()).toMatch(/^✓ GLIDE OK · 1,300 ft high/);
+        expect(plan.spare).toBeCloseTo(300 - 200, 6);
+        expect(text()).toMatch(/^✓ GLIDE OK · 100 ft high/);
         expect(cellText('TO')).toBe('RWY 06/24 nearest part');
         expect(cellText('HEADING')).toMatch(/↑ on course$/);
         expect(cellText('DISTANCE')).toBe('0.0 nm');
+        // the same height crossing the runway at right angles: a turn back to the mid-point, never "+100"
+        sit = overRwy(0.3, 486 + 300, 149, { ground_speed: 80 });
+        plan = panel.render(NOW);
+        expect(plan.kind).toBe('direct');
+        expect(plan.legNm).toBeGreaterThan(0);
+        expect(Math.abs(plan.turnNow)).toBeGreaterThan(60);          // toward the mid-point, ~1,200 ft up the runway
+        expect(plan.spare).toBeLessThan(0);
+        expect(text()).toMatch(/^✗ CANNOT REACH KLKR/);
+        expect(cellText('HEADING')).toMatch(/turn (right|left) \d+°$/);
     });
 
     it('CANNOT REACH: plan B is out of reach too', () => {
@@ -603,7 +613,7 @@ describe('GlidePanel live behaviour', () => {
         const S = GlideInputs.settings(), ref = { lat: KLKR.lat, lon: KLKR.lon };
         const want = (gw) => GlideModel.plan({ airport: GlideInputs.airport(KLKR, S), ac: { ...GlideInputs.aircraft(sit, S, ref, NOW), vs: null },
             glideWind: gw, runwayWind: { kind: 'metar', from: 240, kt: 12, gustKt: 18 } }, S).spare;
-        expect(plan.spare).toBeCloseTo(want({ from: 240, kt: 12, gustKt: 18 }), 6);
+        expect(plan.spare).toBeCloseTo(want({ from: 240, kt: 12, gustKt: 18, noTail: true }), 6);
 
         // a VRB METAR: a headwind of its speed, labelled as the surface wind
         panel.stop();

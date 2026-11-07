@@ -972,9 +972,9 @@ describe('GlideInputs.glideWindFor', () => {
         expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'calm' }, 'METAR KLKR calm (3 min)'), settings()))
             .toEqual({ wind: { headKt: 0 }, label: 'METAR KLKR calm (3 min) · surface', assumed: false, source: 'surface' });
         expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'metar', from: 240, kt: 12, gustKt: 18 }, 'METAR KLKR 240/12G18 (18 min)'), settings()))
-            .toEqual({ wind: { from: 240, kt: 12, gustKt: 18 }, label: 'METAR KLKR 240/12G18 (18 min) · surface', assumed: false, source: 'surface' });
+            .toEqual({ wind: { from: 240, kt: 12, gustKt: 18, noTail: true }, label: 'METAR KLKR 240/12G18 (18 min) · surface', assumed: false, source: 'surface' });
         expect(GlideInputs.glideWindFor(noAloft, rwyOf({ kind: 'metar', from: 240, kt: 12, gustKt: null }, 'METAR KAAA 240/12 (9 min)'), settings()).wind)
-            .toEqual({ from: 240, kt: 12, gustKt: null });
+            .toEqual({ from: 240, kt: 12, gustKt: null, noTail: true });     // a surface wind never gives tailwind credit
         // a nearest-station METAR keeps its own station in the label
         expect(GlideInputs.glideWindFor(null, rwyOf({ kind: 'calm' }, 'METAR KAAA calm (20 min)'), settings()).label)
             .toBe('METAR KAAA calm (20 min) · surface');

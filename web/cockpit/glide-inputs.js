@@ -515,12 +515,13 @@ const GlideInputs = (() => {
     /**
      * The wind the glide legs use, from a glideWind() result (`aloft`) and a runwayWind() result (`runway`):
      *   1. winds aloft when there are any:           aloft.wind, aloft.label (e.g. "250/14 at 3,000 ft · FIS-B")
-     *   2. else the runway (surface) wind:            METAR { from, kt, gustKt } as it is; VRB n (gust g) ->
+     *   2. else the runway (surface) wind:            METAR { from, kt, gustKt, noTail: true } (no tailwind credit);
+     *      VRB n (gust g) ->
      *      { headKt: max(n, g) }; calm -> { headKt: 0 }; label "<runway label> · surface"
      *      (e.g. "METAR KLKR VRB/04 (8 min) · surface")
      *   3. else null: the model assumes noWindHeadwindKt on every course;
      *      label "NO CURRENT WINDS ALOFT · 10 kt headwind assumed", assumed true.
-     * -> { wind: null | { from, kt, gustKt? } | { headKt }, label, assumed }
+     * -> { wind: null | { from, kt, gustKt?, noTail? } | { headKt }, label, assumed, source: 'aloft'|'surface'|'assumed' }
      */
     function glideWindFor(aloft, runway, settings_) {
         if (aloft && aloft.wind && isNum(aloft.wind.from) && isNum(aloft.wind.kt)) {
@@ -529,7 +530,8 @@ const GlideInputs = (() => {
         const w = runway && runway.wind;
         const surface = (wind) => ({ wind, label: `${runway.label || 'surface wind'} · surface`, assumed: false, source: 'surface' });
         if (w && w.kind === 'metar' && isNum(w.from) && isNum(w.kt)) {
-            return surface({ from: w.from, kt: w.kt, gustKt: isNum(w.gustKt) ? w.gustKt : null });
+            // noTail: a surface wind never helps the glide (a tailwind component counts as 0; spec 2026-11-06 review)
+            return surface({ from: w.from, kt: w.kt, gustKt: isNum(w.gustKt) ? w.gustKt : null, noTail: true });
         }
         if (w && w.kind === 'vrb') {
             const kts = [w.kt, w.gustKt].filter(isNum);

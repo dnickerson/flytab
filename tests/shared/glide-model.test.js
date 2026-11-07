@@ -207,6 +207,46 @@ describe('GlideModel', () => {
             expect(GlideModel.triangle(0, tas, { ...steady, gustKt: null }, S())).toEqual(GlideModel.triangle(0, tas, steady, S()));
         });
 
+        it('gust: the triangle is solved with the steady and the gust speed, the LOWER ground speed (and its heading) wins', () => {
+            const tasG = 70;
+            for (const course of [0, 30, 60, 90, 120, 150, 180, 210, 270, 330]) {
+                const st = GlideModel.triangle(course, tasG, { from: 360, kt: 10 }, S());
+                const gu = GlideModel.triangle(course, tasG, { from: 360, kt: 25 }, S());
+                const both = GlideModel.triangle(course, tasG, { from: 360, kt: 10, gustKt: 25 }, S());
+                const lower = st.gs <= gu.gs ? st : gu;
+                expect(both, `course ${course}`).toEqual(lower);
+            }
+            // a pure crosswind: the gust crab costs ground speed, so the gust solution is used
+            const x = GlideModel.triangle(90, tasG, { from: 360, kt: 10, gustKt: 25 }, S());
+            expect(x.gs).toBeCloseTo(tasG * Math.cos(Math.asin(25 / tasG)), 9);
+            expect(x.gs).toBeLessThan(GlideModel.triangle(90, tasG, { from: 360, kt: 10 }, S()).gs);
+        });
+
+        it('noTail (a surface METAR wind): a tailwind component counts as 0, a headwind counts in full', () => {
+            const tasN = 70;
+            expect(GlideModel.triangle(180, tasN, { from: 360, kt: 15, noTail: true }, S()).gs).toBeCloseTo(70, 9);
+            expect(GlideModel.triangle(180, tasN, { from: 360, kt: 15 }, S()).gs).toBeCloseTo(85, 9);
+            expect(GlideModel.triangle(0, tasN, { from: 360, kt: 15, noTail: true }, S()).gs).toBeCloseTo(55, 9);
+            // quartering tail: only the crab remains
+            const q = GlideModel.triangle(135, tasN, { from: 360, kt: 15, noTail: true }, S());
+            const wca = Math.asin(15 * Math.sin(rad(360 - 135)) / tasN);
+            expect(q.gs).toBeCloseTo(tasN * Math.cos(wca), 9);
+            // with a gust too: never above the still-air speed on a tail course
+            expect(GlideModel.triangle(180, tasN, { from: 360, kt: 10, gustKt: 25, noTail: true }, S()).gs).toBeCloseTo(70, 9);
+        });
+
+        it('plan(): a surface METAR tailwind (noTail) on the glide leg gives exactly the calm answer', () => {
+            // 3 nm SE of the field, tracking toward the runway (323), wind from 143 = a straight tailwind
+            const o = { pos: fromPolar(143, 3), alt: 2500, trk: 323, gs: 80 };
+            const tail = GlideModel.plan(input({ ...o, wind: { from: 143, kt: 15, gustKt: null, noTail: true },
+                runwayWind: { kind: 'metar', from: 143, kt: 15, gustKt: null } }), S());
+            const calm = GlideModel.plan(input({ ...o, wind: { headKt: 0 }, runwayWind: { kind: 'calm' } }), S());
+            const aloft = GlideModel.plan(input({ ...o, wind: { from: 143, kt: 15 }, runwayWind: { kind: 'none' } }), S());
+            expect(tail.kind).toBe('direct');
+            expect(tail.spare).toBeCloseTo(calm.spare, 6);
+            expect(aloft.spare).toBeGreaterThan(calm.spare + 20);          // a wind aloft tailwind does count
+        });
+
         it('null keeps the assumed noWindHeadwindKt; a malformed wind is treated as null', () => {
             expect(GlideModel.triangle(90, tas, null, S()).gs).toBe(60);
             expect(GlideModel.triangle(90, tas, { from: NaN, kt: 5 }, S()).gs).toBe(60);
@@ -306,7 +346,26 @@ describe('GlideModel', () => {
             expect(GlideModel.plan(fin({ airport: ap2 }), S()).needMsl).toBe(ELEV);
         });
 
-        it('the landing heading wind triangle uses the glide wind ({ headKt } and vector)', () => {
+        it('ground speed on final comes from the RUNWAY wind: max(tas - headRwy, 20)', () => {
+            const tas = 65 * (1 + 0.02 * 0.9);
+            // a 20 kt tailwind aloft and a calm METAR: gs = tas (not tas + 20)
+            const calm = GlideModel.plan(fin({ wind: { from: 53, kt: 20 }, runwayWind: { kind: 'calm' } }), S());
+            expect(calm.kind).toBe('final');
+            expect(calm.tMin).toBeCloseTo(0.5 * 60 / tas, 9);
+            // a METAR headwind of 12G18 straight down 233: gs = tas - 18 whatever the glide wind
+            const head = GlideModel.plan(fin({ wind: { from: 53, kt: 20 }, runwayWind: { kind: 'metar', from: 233, kt: 12, gustKt: 18 } }), S());
+            expect(head.tMin).toBeCloseTo(0.5 * 60 / (tas - 18), 9);
+            // VRB 6: a 6 kt headwind
+            const vrb = GlideModel.plan(fin({ wind: null, runwayWind: { kind: 'vrb', kt: 6, gustKt: null } }), S());
+            expect(vrb.tMin).toBeCloseTo(0.5 * 60 / (tas - 6), 9);
+            // floor: a 60 kt headwind -> 20 kt
+            const floor = GlideModel.plan(fin({ runwayWind: { kind: 'metar', from: 233, kt: 60, gustKt: null } }), S());
+            expect(floor.tMin).toBeCloseTo(0.5 * 60 / 20, 9);
+            // the heading still crabs for the glide wind
+            expect(GlideModel.plan(fin({ wind: { from: 323, kt: 15 }, runwayWind: { kind: 'calm' } }), S()).hdgTrue).not.toBeCloseTo(233, 0);
+        });
+
+        it('no runway wind: the final ground speed falls back on the glide wind ({ headKt } and vector, err high)', () => {
             const tas = 65 * (1 + 0.02 * 0.9);
             const vrb = GlideModel.plan(fin({ wind: { headKt: 4 } }), S());
             expect(vrb.tMin).toBeCloseTo(0.5 * 60 / (tas - 4), 9);
@@ -363,76 +422,191 @@ describe('GlideModel', () => {
         });
     });
 
-    describe('over the runway (kind over) and the high pass (ruling 2)', () => {
-        // a point on the runway centreline, `k` of the way from the 233 end's physical end... (rwy.a = the SW end)
+    describe('over the runway footprint (rulings after the critical review)', () => {
+        // a point on the runway centreline, `k` of the way from the SW physical end (rwy.a) to the NE one (rwy.b);
+        // latFt to the right of 053. Runway 6,004 ft, directions 053 (toward b) and 233 (toward a).
         const onRwy = (k, latFt = 0) => {
             const a = fromPolar(RWY_TRUE, half), b = fromPolar(RWY_TRUE + 180, half);
-            const side = fromPolar(RWY_TRUE + 90, latFt / FT_PER_NM);
+            const side = fromPolar(RWY_TRUE + 90 + 180, latFt / FT_PER_NM);
             return { x: a.x + k * (b.x - a.x) + side.x, y: a.y + k * (b.y - a.y) + side.y };
         };
+        /** needAheadFt with no wind (float at TAS), written from the spec: glide distance from the height + 1,000 ft. */
+        const needAheadFt = (alt, heightFt) => heightFt / GlideModel.sinkAt(alt, S()) * GlideModel.tasAt(alt, S()) * 101.269 + 1000;
+        /** The turn back: the same aircraft planned to the runway mid-point (the reference point here) - a 'ref' plan. */
+        const toMid = (o) => GlideModel.plan(input({ ...o, airport: { elevFt: ELEV, ref: { x: 0, y: 0 }, ends: [] } }), S());
+        const zeroLeg = (p) => p.legNm === 0 && p.turnNow === 0 && p.tMin === 0;
+        const P = (o) => GlideModel.plan(input(o), S());
 
-        it('low over the runway: OVER, spare = alt - elev, zero leg, no turn', () => {
-            const p = GlideModel.plan(input({ pos: onRwy(0.3, 20), alt: ELEV + 40, trk: 233, gs: 50, vs: -300 }), S());
+        it('low, lined up, room ahead: OVER, spare = alt - elev, zero leg, no turn', () => {
+            const p = P({ pos: onRwy(0.3, 20), alt: ELEV + 40, trk: 233, gs: 50, vs: -300 });
             expect(p.kind).toBe('over');
             expect(p.endId).toBe('both');
             expect(p.needMsl).toBe(ELEV);
             expect(p.spare).toBeCloseTo(40, 9);
-            expect(p.legNm).toBe(0);
-            expect(p.tMin).toBe(0);
+            expect(zeroLeg(p)).toBe(true);
             expect(p.target).toBe(0);
             expect(p.targetNow).toBe(0);
-            expect(p.turnNow).toBe(0);
             expect(p.hdgTrue).toBe(233);
             expect(p.measured).toBe(300);
             expect(p.headRwy).toBeNull();
             expect(p.tailwindKt).toBe(0);
-            // the rollout: at or below the field, any track
-            expect(GlideModel.plan(input({ pos: onRwy(0.6), alt: ELEV - 5, trk: 240, gs: 30 }), S()).kind).toBe('over');
         });
 
-        it('the over gate ends at alt - elev = marginFt; higher: direct with no turn and a zero leg', () => {
-            expect(GlideModel.plan(input({ pos: onRwy(0.5), alt: ELEV + 200, trk: 90 }), S()).kind).toBe('over');
-            const p = GlideModel.plan(input({ pos: onRwy(0.5), alt: ELEV + 1500, trk: 90, gs: 140 }), S());
+        it('rollout at 40 kt lined up with plenty of runway ahead: OVER (either direction)', () => {
+            expect(P({ pos: onRwy(0.3), alt: ELEV + 3, trk: 53, gs: 40 }).kind).toBe('over');
+            expect(P({ pos: onRwy(0.7), alt: ELEV - 5, trk: 233, gs: 40 }).kind).toBe('over');
+        });
+
+        it('taxi speed (gs < showAboveGsKt, default 25): OVER at any track; above it, crossing is not', () => {
+            expect(P({ pos: onRwy(0.5), alt: ELEV, trk: 143, gs: 10 }).kind).toBe('over');
+            expect(P({ pos: onRwy(0.99), alt: ELEV, trk: 53, gs: 24 }).kind).toBe('over');     // even at the very end
+            const fast = P({ pos: onRwy(0.5), alt: ELEV, trk: 143, gs: 30 });
+            expect(fast.kind).toBe('direct');
+            // showAboveGsKt is read from the pilot settings
+            const s35 = S(); s35.pilot.showAboveGsKt = 35;
+            expect(GlideModel.plan(input({ pos: onRwy(0.5), alt: ELEV, trk: 143, gs: 30 }), s35).kind).toBe('over');
+            // no ground speed known: never taxi
+            expect(P({ pos: onRwy(0.5), alt: ELEV + 10, trk: 143, gs: NaN }).kind).toBe('direct');
+        });
+
+        it('crossing at right angles at 150 ft (not taxi speed): NOT over - the turn back to the mid-point', () => {
+            const o = { pos: onRwy(0.3), alt: ELEV + 150, trk: 143, gs: 70 };
+            const p = P(o);
             expect(p.kind).toBe('direct');
             expect(p.endId).toBe('both');
+            expect(zeroLeg(p)).toBe(false);
             expect(p.needMsl).toBe(ELEV + 200);
-            expect(p.spare).toBeCloseTo(1500 - 200, 9);
-            expect(p.legNm).toBe(0);
-            expect(p.tMin).toBe(0);
-            expect(p.target).toBe(0);
-            expect(p.targetNow).toBe(0);
-            expect(p.turnNow).toBe(0);
-            expect(p.hdgTrue).toBe(90);
-            // the margin setting moves the gate
+            const mid = toMid(o);
+            expect(Math.hypot(p.pt.x, p.pt.y)).toBeLessThan(1e-12);       // the runway mid-point (here the reference point)
+            expect(p.spare).toBeCloseTo(mid.spare, 9);
+            expect(p.legNm).toBeCloseTo(mid.legNm, 9);
+            expect(p.turnNow).toBeCloseTo(mid.turnNow, 9);
+        });
+
+        it('over the last 100 ft heading out at 150 ft: NOT over - the turn back', () => {
+            const p = P({ pos: onRwy(1 - 100 / RWY_LEN), alt: ELEV + 150, trk: 53, gs: 70 });
+            expect(p.kind).toBe('direct');
+            expect(zeroLeg(p)).toBe(false);
+            expect(p.spare).toBeLessThan(0);
+        });
+
+        it('lined up = within 30 degrees of either direction', () => {
+            const at = (trk) => P({ pos: onRwy(0.5), alt: ELEV + 50, trk, gs: 60 }).kind;
+            for (const t of [53, 53 + 29, 53 - 29, 233, 233 + 29, 233 - 29]) expect(at(t), `trk ${t}`).toBe('over');
+            for (const t of [53 + 31, 53 - 31, 233 + 31, 233 - 31, 143, 323]) expect(at(t), `trk ${t}`).toBe('direct');
+        });
+
+        it('the room ahead: aheadFt >= glide distance from the height + ROLLOUT_FT 1,000 ft', () => {
+            const alt = ELEV + 150;
+            const need = needAheadFt(alt, 150);                   // ~2,410 ft; wind null: float at TAS, no headwind credit
+            expect(need).toBeGreaterThan(2300);
+            expect(need).toBeLessThan(2500);
+            const kOk = 1 - (need + 20) / RWY_LEN, kShort = 1 - (need - 20) / RWY_LEN;
+            expect(P({ pos: onRwy(kOk), alt, trk: 53, gs: 60 }).kind).toBe('over');
+            expect(P({ pos: onRwy(kShort), alt, trk: 53, gs: 60 }).kind).toBe('direct');
+            // the assumed 10 kt headwind does not shorten the float; a tailwind lengthens it
+            const tw = { from: 233, kt: 20 };                       // a 20 kt tailwind along 053
+            const needTw = 150 / GlideModel.sinkAt(alt, S()) * (GlideModel.tasAt(alt, S()) + 20) * 101.269 + 1000;
+            const kTw = 1 - (needTw - 20) / RWY_LEN;
+            expect(P({ pos: onRwy(kTw), alt, trk: 53, gs: 60 }).kind).toBe('over');
+            expect(P({ pos: onRwy(kTw), alt, trk: 53, gs: 60, wind: tw, runwayWind: { kind: 'none' } }).kind).toBe('direct');
+            expect(P({ pos: onRwy(1 - (needTw + 20) / RWY_LEN), alt, trk: 53, gs: 60, wind: tw, runwayWind: { kind: 'none' } }).kind).toBe('over');
+            // a surface tailwind with noTail still lengthens the float (never helps the verdict)
+            expect(P({ pos: onRwy(kTw), alt, trk: 53, gs: 60, wind: { ...tw, noTail: true }, runwayWind: { kind: 'none' } }).kind).toBe('direct');
+            // a headwind does not shorten it
+            expect(P({ pos: onRwy(kShort), alt, trk: 53, gs: 60, wind: { from: 53, kt: 20 }, runwayWind: { kind: 'none' } }).kind).toBe('direct');
+            expect(P({ pos: onRwy(kShort), alt, trk: 53, gs: 60, wind: { headKt: 15 } }).kind).toBe('direct');
+        });
+
+        it('the height is above the elevation of the end ahead (its NASR elevation when known)', () => {
+            const ap = klkr();
+            const physNE = fromPolar(RWY_TRUE + 180, half), physSW = fromPolar(RWY_TRUE, half);
+            ap.ends[0] = { ...ap.ends[0], phys: physNE, elevFt: ELEV - 100 };    // end A lands 233 from the NE end
+            ap.ends[1] = { ...ap.ends[1], phys: physSW, elevFt: ELEV };
+            ap.ends.forEach((e) => { e.rwy = { a: physSW, b: physNE }; });
+            const alt = ELEV + 150;
+            // heading 053 the end ahead is the NE one, 100 ft lower: 250 ft to float down, not 150
+            const need250 = needAheadFt(alt, 250);
+            const k = 1 - (need250 - 20) / RWY_LEN;
+            const p = GlideModel.plan(input({ pos: onRwy(k), alt, trk: 53, gs: 60, airport: ap }), S());
+            expect(p.kind).toBe('direct');
+            expect(GlideModel.plan(input({ pos: onRwy(k), alt, trk: 53, gs: 60 }), S()).kind).toBe('over');   // field elevation
+            expect(GlideModel.plan(input({ pos: onRwy(1 - (need250 + 20) / RWY_LEN), alt, trk: 53, gs: 60, airport: ap }), S()).kind).toBe('over');
+        });
+
+        it('high pass, lined up, enough runway ahead: zero leg, spare = alt - elev - marginFt; not enough: the turn back', () => {
+            const alt = ELEV + 300, need = needAheadFt(alt, 300);
+            const ok = P({ pos: onRwy(1 - (need + 50) / RWY_LEN), alt, trk: 53, gs: 80 });
+            expect(ok.kind).toBe('direct');
+            expect(zeroLeg(ok)).toBe(true);
+            expect(ok.needMsl).toBe(ELEV + 200);
+            expect(ok.spare).toBeCloseTo(100, 9);
+            expect(ok.hdgTrue).toBe(53);
+            const o = { pos: onRwy(1 - (need - 50) / RWY_LEN), alt, trk: 53, gs: 80 };
+            const short = P(o);
+            expect(short.kind).toBe('direct');
+            expect(zeroLeg(short)).toBe(false);
+            expect(short.spare).toBeCloseTo(toMid(o).spare, 9);
+            expect(short.spare).toBeLessThan(100);
+            // the margin setting moves the over / high-pass line
             const s5 = S(); s5.pilot.marginFt = 500;
-            expect(GlideModel.plan(input({ pos: onRwy(0.5), alt: ELEV + 400, trk: 90 }), s5).kind).toBe('over');
-            expect(GlideModel.plan(input({ pos: onRwy(0.5), alt: ELEV + 400, trk: 90 }), S()).kind).toBe('direct');
+            expect(GlideModel.plan(input({ pos: onRwy(0.05), alt: ELEV + 400, trk: 53 }), s5).kind).toBe('over');
+            expect(GlideModel.plan(input({ pos: onRwy(0.05), alt: ELEV + 200, trk: 53 }), S()).kind).toBe('over');
+            expect(zeroLeg(GlideModel.plan(input({ pos: onRwy(0.05), alt: ELEV + 400, trk: 53 }), S()))).toBe(true);
+        });
+
+        it('review probe - climbout over the departure end (track 053, k 0.999): no zero leg, never better than off the end', () => {
+            for (const agl of [600, 1000]) {
+                const on = P({ pos: onRwy(0.999), alt: ELEV + agl, trk: 53, gs: 80 });
+                const off = P({ pos: onRwy(1.001), alt: ELEV + agl, trk: 53, gs: 80 });
+                expect(on.kind).toBe('direct');
+                expect(zeroLeg(on), `${agl}`).toBe(false);
+                expect(Math.abs(on.turnNow)).toBeGreaterThan(170);           // the turn back
+                expect(Math.abs(off.turnNow)).toBeGreaterThan(170);
+                expect(on.spare).toBeLessThanOrEqual(off.spare);            // the mid-point is farther than the end
+                expect(on.spare).toBeGreaterThan(off.spare - 200);           // ~ the same turn back
+                if (agl === 600) { expect(on.spare).toBeLessThan(0); expect(off.spare).toBeLessThan(0); }   // never GLIDE OK
+            }
+        });
+
+        it('review probe - crossing at right angles at 400 ft, 199 ft off the centreline: the turn back, not +200', () => {
+            const ap = klkr(); ap.ends.forEach((e) => { e.widthFt = 101; });   // gate 200.5 ft
+            const o = { pos: onRwy(0.5, 199), alt: ELEV + 400, trk: 143, gs: 90, airport: ap };
+            const p = GlideModel.plan(input(o), S());
+            expect(p.kind).toBe('direct');
+            expect(zeroLeg(p)).toBe(false);
+            expect(p.spare).not.toBeCloseTo(200, 0);
+            expect(p.spare).toBeLessThan(0);
+            expect(p.spare).toBeCloseTo(toMid(o).spare, 9);
         });
 
         it('lateral gate: max(width / 2, 50) + 150 ft from the centreline (100 ft wide when unknown)', () => {
-            const at = (latFt, widthFt) => {
+            const kindAt = (latFt, widthFt) => {
                 const ap = klkr();
                 if (widthFt !== undefined) ap.ends.forEach((e) => { e.widthFt = widthFt; });
                 return GlideModel.plan(input({ pos: onRwy(0.5, latFt), alt: ELEV + 100, trk: 233, airport: ap }), S()).kind;
             };
-            expect(at(195)).toBe('over');                // unknown width: 50 + 150 = 200 ft
-            expect(at(-195)).toBe('over');
-            expect(at(205)).toBe('direct');
-            expect(at(205, 150)).toBe('over');           // 75 + 150 = 225 ft
-            expect(at(230, 150)).toBe('direct');
-            expect(at(195, 40)).toBe('over');            // narrow: max(20, 50) + 150 = 200 ft
-            expect(at(205, 40)).toBe('direct');
+            expect(kindAt(195)).toBe('over');            // unknown width: 50 + 150 = 200 ft
+            expect(kindAt(-195)).toBe('over');
+            expect(kindAt(205)).toBe('direct');
+            expect(kindAt(205, 150)).toBe('over');       // 75 + 150 = 225 ft
+            expect(kindAt(230, 150)).toBe('direct');
+            expect(kindAt(195, 40)).toBe('over');        // narrow: max(20, 50) + 150 = 200 ft
+            expect(kindAt(205, 40)).toBe('direct');
         });
 
-        it('along-runway gate: only strictly between the physical ends (0 < k < 1)', () => {
-            expect(GlideModel.plan(input({ pos: onRwy(0.01), alt: ELEV + 100, trk: 233 }), S()).kind).toBe('over');
-            expect(GlideModel.plan(input({ pos: onRwy(-0.02), alt: ELEV + 100, trk: 270 }), S()).kind).toBe('direct');
-            expect(GlideModel.plan(input({ pos: onRwy(1.02), alt: ELEV + 100, trk: 270 }), S()).kind).toBe('direct');
+        it('along-runway gate: only strictly between the physical ends (0 < k < 1); off the end: the nearest point', () => {
+            expect(P({ pos: onRwy(0.01), alt: ELEV + 100, trk: 53 }).kind).toBe('over');
+            const before = P({ pos: onRwy(-0.02), alt: ELEV + 100, trk: 270 });
+            expect(before.kind).toBe('direct');
+            expect(before.pt.x).toBeCloseTo(fromPolar(RWY_TRUE, half).x, 9);
+            const beyond = P({ pos: onRwy(1.02), alt: ELEV + 100, trk: 270 });
+            expect(beyond.kind).toBe('direct');
+            expect(beyond.pt.x).toBeCloseTo(fromPolar(RWY_TRUE + 180, half).x, 9);
         });
 
-        it('precedence: over beats final (lined up over the runway)', () => {
-            const p = GlideModel.plan(input({ pos: onRwy(0.95), alt: ELEV + 50, trk: 53 }), S());
-            expect(p.kind).toBe('over');
+        it('precedence: low and lined up near the start of the runway is over, not final', () => {
+            expect(P({ pos: onRwy(0.02), alt: ELEV + 50, trk: 53, gs: 60 }).kind).toBe('over');
         });
     });
 
@@ -492,7 +666,7 @@ describe('GlideModel', () => {
             const d2 = GlideModel.plan(input({ pos: fromPolar(0, 4.6), alt: 700, trk: 90, wind: null, airport }), S());
             expect(d2.kind).toBe('direct');
             expect(d2.runwayId).toBe('18/36');
-            const o = GlideModel.plan(input({ pos: n, alt: 600, trk: 90, airport }), S());
+            const o = GlideModel.plan(input({ pos: n, alt: 600, trk: 0, airport }), S());    // lined up on 18/36
             expect(o.kind).toBe('over');
             expect(o.runwayId).toBe('18/36');
 
@@ -507,8 +681,10 @@ describe('GlideModel', () => {
             const keys = ['needMsl', 'spare', 'hdgTrue', 'legNm', 'tMin', 'target', 'projected', 'targetNow', 'turnNow', 'tailwindKt', 'measured'];
             const seen = new Set();
             const cases = [
-                { pos: { x: 0, y: 0 }, alt: 600 },                  // over
-                { pos: { x: 0, y: 0 }, alt: 900 },                  // high over -> direct, zero leg
+                { pos: { x: 0, y: 0 }, alt: 600, trk: 233 },        // over (lined up, room ahead)
+                { pos: fromPolar(53, half * 0.9), alt: 790, trk: 233 },   // high pass, zero leg
+                { pos: { x: 0, y: 0 }, alt: 600 },                  // crossing low -> turn back to the mid-point
+                { pos: { x: 0, y: 0 }, alt: 900 },
                 { pos: { x: 0, y: 0 }, alt: 6000 },
                 { pos: onFinalA(0.5), alt: 900, trk: 233 },         // final
                 { pos: onFinalA(0.001), alt: 490, trk: 233 },       // final, at the end

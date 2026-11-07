@@ -111,3 +111,61 @@ describe('the same flight with no METAR and no winds aloft: the assumed 10 kt he
         expect(planAt(r, VRB04).plan.spare).toBeGreaterThanOrEqual(0);
     });
 });
+
+describe('the critical review probes on the real KLKR record (VRB 04)', () => {
+    const RW = KLKR.runways[0], FT = 6076.12;
+    const A = GlideModel.toLocal(KLKR.lat, KLKR.lon, RW.base_lat, RW.base_lon);      // the 06 end
+    const B = GlideModel.toLocal(KLKR.lat, KLKR.lon, RW.recip_lat, RW.recip_lon);    // the 24 end
+    const LEN_FT = Math.hypot(B.x - A.x, B.y - A.y) * FT;
+    const BRG = (Math.atan2(B.x - A.x, B.y - A.y) * 180 / Math.PI + 360) % 360;      // ~058
+    /** k of the way from the 06 end to the 24 end, latFt to the right of the 06 direction. */
+    const at = (k, latFt = 0) => {
+        const r = (BRG + 90) * Math.PI / 180, l = latFt / FT;
+        return { x: A.x + k * (B.x - A.x) + l * Math.sin(r), y: A.y + k * (B.y - A.y) + l * Math.cos(r) };
+    };
+    const gw = GlideInputs.glideWindFor(NO_ALOFT, VRB04, S);
+    const P = (pos, agl, trk, gs) => GlideModel.plan({ airport: APT,
+        ac: { pos, altMsl: KLKR.elev_ft + agl, gs, trkTrue: trk, vs: null }, glideWind: gw.wind, runwayWind: VRB04.wind }, S);
+    const zeroLeg = (p) => p.legNm === 0 && p.turnNow === 0;
+
+    it('climbout over the 24 end (track 059, k 0.999) at 600 / 1,000 ft: a turn back like one second later off the end', () => {
+        for (const agl of [600, 1000]) {
+            const on = P(at(0.999), agl, 59, 80), off = P(at(1.001), agl, 59, 80);
+            expect(on.kind).toBe('direct');
+            expect(zeroLeg(on)).toBe(false);
+            expect(Math.abs(on.turnNow)).toBeGreaterThan(170);
+            expect(on.spare).toBeLessThanOrEqual(off.spare);
+            expect(on.spare).toBeGreaterThan(off.spare - 200);
+        }
+        expect(P(at(0.999), 600, 59, 80).spare).toBeLessThan(0);          // never GLIDE OK at 600 ft
+    });
+
+    it('crossing at right angles at 400 ft, 199 ft off the centreline: the turn back, not +200', () => {
+        const p = P(at(0.5, 199), 400, 149, 90);
+        expect(p.kind).toBe('direct');
+        expect(zeroLeg(p)).toBe(false);
+        expect(p.spare).toBeLessThan(0);
+    });
+
+    it('crossing at right angles at 150 ft: not over; over the last 100 ft heading out at 150 ft: not over', () => {
+        expect(P(at(0.5), 150, 149, 70).kind).toBe('direct');
+        const out = P(at(1 - 100 / LEN_FT), 150, 59, 70);
+        expect(out.kind).toBe('direct');
+        expect(zeroLeg(out)).toBe(false);
+    });
+
+    it('rollout at 40 kt lined up: over; taxi speed crossing: over', () => {
+        expect(P(at(0.3), 3, 59, 40).kind).toBe('over');
+        expect(P(at(0.5), 0, 149, 10).kind).toBe('over');
+    });
+
+    it('high pass lined up at 300 ft: zero leg with ~5,400 ft ahead, the turn back with ~2,400 ft ahead', () => {
+        const ok = P(at(0.1), 300, 59, 80);
+        expect(ok.kind).toBe('direct');
+        expect(zeroLeg(ok)).toBe(true);
+        expect(ok.spare).toBeCloseTo(100, 9);
+        const short = P(at(0.6), 300, 59, 80);
+        expect(zeroLeg(short)).toBe(false);
+        expect(short.spare).toBeLessThan(0);
+    });
+});

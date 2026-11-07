@@ -29,10 +29,12 @@ const GlideModel = (() => {
 
     // ---- Physical constants (not settings) ---------------------------------
     const FT_PER_NM = 6076.12;
+    const KT_TO_FPM = 101.269;          // 1 kt in feet per minute
     const STD_RATE_K = 1091;            // standard-rate turn: rate(deg/s) = 1091 * tan(bank) / TAS(kt)
     const NM_PER_DEG_LAT = 60;          // a nautical mile is one minute of latitude
     // ---- Numerical guards / integration steps (not model values) ----------
     const MIN_GS_KT = 1;                // ground speed floor so time = distance / gs stays finite
+    const MIN_FINAL_GS_KT = 20;         // ground speed floor on a short final (reference: Math.max(..., 20))
     const TURN_STEP_DEG = 2;            // initialTurn() integration step and "turn finished" tolerance
     const TURN_MAX_STEPS = 200;         // initialTurn() iteration bound
     const MIN_LEG_MIN = 1 / 60;         // 1 s: floor on leg time when deriving a target rate over the field
@@ -43,6 +45,9 @@ const GlideModel = (() => {
     const FINAL_MAX_NM = 1.0;           // short final: the runway end ahead by 0 < d <= this along the landing heading,
     const FINAL_LATERAL_NM = 0.1;       // within this of the extended centreline,
     const FINAL_TRACK_DEG = 30;         // track within this of the landing heading
+    // ---- Over the runway (spec 2026-11-06, rulings after the critical review) ----
+    const LINED_UP_DEG = 30;            // over the runway, "lined up": track within this of either runway direction
+    const ROLLOUT_FT = 1000;            // runway needed after touchdown, added to the straight-glide distance ahead
 
     /**
      * The agreed RV-9A defaults. Aircraft values persist via flypi_user_aircraft, pilot values via cockpit-config.
@@ -94,6 +99,7 @@ const GlideModel = (() => {
             bankDeg: pick(p, DEFAULTS.pilot, 'turnBankDeg'),
             marginFt: pick(p, DEFAULTS.pilot, 'marginFt'),
             noWindHeadKt: pick(p, DEFAULTS.pilot, 'noWindHeadwindKt'),
+            showAboveGsKt: pick(p, DEFAULTS.pilot, 'showAboveGsKt'),
         };
         r.turnSinkFactor = 1 / Math.pow(Math.cos(rad(r.bankDeg)), 1.5);
         return r;
@@ -104,25 +110,52 @@ const GlideModel = (() => {
 
     /** { headKt }: a headwind of headKt on every course (a VRB or calm surface wind). */
     const isHeadWind = (w) => !!w && Number.isFinite(w.headKt);
-    /** { from, kt, gustKt? }: a wind vector. */
+    /** { from, kt, gustKt?, noTail? }: a wind vector. */
     const isVecWind = (w) => !!w && Number.isFinite(w.from) && Number.isFinite(w.kt);
-    /** The vector wind's speed on a course with cos(from - course) = c: the gust when it is a headwind there (err high). */
-    const windKtOn = (w, c) => (c > 0 && Number.isFinite(w.gustKt) ? Math.max(w.kt, w.gustKt) : w.kt);
+    /** The vector wind's speeds to try: the steady speed, and the gust when there is one. */
+    const vecSpeeds = (w) => (Number.isFinite(w.gustKt) ? [w.kt, w.gustKt] : [w.kt]);
 
-    function triangleR(R, courseT, tasKt, wind) {
-        if (isHeadWind(wind)) return { hdg: courseT, gs: Math.max(tasKt - wind.headKt, MIN_GS_KT), wca: 0 };
-        if (!isVecWind(wind)) return { hdg: courseT, gs: Math.max(tasKt - R.noWindHeadKt, MIN_GS_KT), wca: 0 };
-        const rel = rad(wind.from - courseT);
-        const kt = windKtOn(wind, Math.cos(rel));
-        const cross = kt * Math.sin(rel), head = kt * Math.cos(rel);
+    /** The vector triangle for one wind speed. noTail: a tailwind component counts as 0 (it never helps). */
+    function solve(courseT, tasKt, from, kt, noTail) {
+        const rel = rad(from - courseT);
+        const cross = kt * Math.sin(rel);
+        const head = noTail ? Math.max(0, kt * Math.cos(rel)) : kt * Math.cos(rel);
         const s = Math.max(-1, Math.min(1, cross / tasKt));
         const wca = deg(Math.asin(s));
         return { hdg: norm(courseT + wca), gs: Math.max(tasKt * Math.cos(rad(wca)) - head, MIN_GS_KT), wca };
     }
 
+    function triangleR(R, courseT, tasKt, wind) {
+        if (isHeadWind(wind)) return { hdg: courseT, gs: Math.max(tasKt - wind.headKt, MIN_GS_KT), wca: 0 };
+        if (!isVecWind(wind)) return { hdg: courseT, gs: Math.max(tasKt - R.noWindHeadKt, MIN_GS_KT), wca: 0 };
+        // With a gust: solved with the steady and the gust speed, the LOWER ground speed (and its heading) is used.
+        let best = null;
+        for (const kt of vecSpeeds(wind)) {
+            const t = solve(courseT, tasKt, wind.from, kt, !!wind.noTail);
+            if (!best || t.gs < best.gs) best = t;
+        }
+        return best;
+    }
+
     /**
-     * Wind triangle. wind = { from, kt, gustKt? } (the gust replaces kt where it is a headwind), { headKt } (that
-     * headwind on every course), or null (no wind data: the assumed noWindHeadwindKt headwind). -> { hdg, gs, wca }
+     * Ground speed along `courseT` for the runway left ahead (needAheadFt): the conservative way round - the
+     * HIGHER ground speed (a longer float). A headwind (the assumed one, a { headKt } surface wind, or a headwind
+     * component) never shortens it below the still-air TAS; a tailwind component always counts (noTail ignored),
+     * and with a gust the faster of the steady / gust solutions is used.
+     */
+    function floatGsR(courseT, tasKt, wind) {
+        let gs = tasKt;
+        if (isVecWind(wind)) {
+            for (const kt of vecSpeeds(wind)) gs = Math.max(gs, solve(courseT, tasKt, wind.from, kt, false).gs);
+        }
+        return gs;
+    }
+
+    /**
+     * Wind triangle. wind = { from, kt, gustKt?, noTail? } (with a gust: solved with kt and with the gust, the lower
+     * ground speed wins; noTail: a tailwind component counts as 0 - a surface METAR wind never helps), { headKt }
+     * (that headwind on every course), or null (no wind data: the assumed noWindHeadwindKt headwind).
+     * -> { hdg, gs, wca }
      */
     function triangle(courseT, tasKt, wind, settings) {
         return triangleR(resolve(settings), courseT, tasKt, wind);
@@ -171,8 +204,10 @@ const GlideModel = (() => {
         }
         if (isHeadWind(glideWind)) return glideWind.headKt;
         if (isVecWind(glideWind)) {
+            // err high: the larger headwind / smaller tailwind of the steady and gust speeds
             const c = Math.cos(rad(glideWind.from - hdg));
-            return windKtOn(glideWind, c) * c;
+            const head = Math.max(...vecSpeeds(glideWind).map((kt) => kt * c));
+            return glideWind.noTail ? Math.max(0, head) : head;
         }
         return R.noWindHeadKt;
     }
@@ -189,6 +224,19 @@ const GlideModel = (() => {
     }
 
     /**
+     * The elevation of runway physical end `pt` of end e's runway: the NASR elevation of the end (same runway segment)
+     * whose physical end is `pt`; the field elevation when no end there carries one.
+     */
+    function endElevAt(segEnds, e, pt, fieldElev) {
+        for (const o of segEnds) {
+            if (o.rwy.a !== e.rwy.a || o.rwy.b !== e.rwy.b) continue;   // ends of the same runway share its segment points
+            const q = isPt(o.phys) ? o.phys : null;
+            if (q && Math.hypot(q.x - pt.x, q.y - pt.y) < 1e-9 && Number.isFinite(o.elevFt)) return o.elevFt;
+        }
+        return fieldElev;
+    }
+
+    /**
      * input = { airport: { elevFt, ref: {x,y},
      *                      ends: [{ id, runwayId, thr, phys, elevFt, hdgTrue, rwyLenFt, mid, widthFt, rwy: {a, b} }] },
      *           ac: { pos, altMsl, gs, trkTrue, vs },
@@ -199,20 +247,29 @@ const GlideModel = (() => {
      *      projected, measured, targetNow, turnNow, headRwy, tailwindKt }
      *
      * Target (spec 2026-11-06-engine-out-glide-runway-target.md), first that applies:
-     *   'over'   the aircraft's projection lies on a runway segment (0 < k < 1) within overHalfFt() of its
-     *            centreline and alt - elev <= marginFt: no glide to plan. needMsl = elev, spare = alt - elev,
-     *            pt = that runway point, legNm 0, tMin 0, target 0, targetNow 0, hdgTrue = track, turnNow 0.
-     *            Higher over the same footprint: kind 'direct' with those zero-leg numbers, needMsl = elev +
-     *            marginFt, spare = alt - elev - marginFt (no initial turn toward an abeam point).
+     *   footprint: the aircraft's projection lies on a runway segment (0 < k < 1) within overHalfFt() of its
+     *            centreline. Lined up = track within LINED_UP_DEG of either runway direction (dir); aheadFt = the
+     *            runway left ahead along dir, to that direction's physical end; needAheadFt = the straight glide
+     *            from the height above that end (its NASR elevation, else the field's) at floatGsR() along dir,
+     *            sink at altitude, + ROLLOUT_FT. roomAhead = lined up and aheadFt >= needAheadFt.
+     *   'over'   on the footprint, alt - elev <= marginFt, and gs < showAboveGsKt (taxi speed) or roomAhead:
+     *            needMsl = elev, spare = alt - elev, pt = the runway point under the aircraft, legNm 0, tMin 0,
+     *            target 0, targetNow 0, hdgTrue = track, turnNow 0.
+     *            High pass (alt - elev > marginFt) with roomAhead: kind 'direct' with those zero-leg numbers,
+     *            needMsl = elev + marginFt, spare = alt - elev - marginFt.
+     *            Anything else on the footprint (not lined up, or not enough runway ahead): kind 'direct' to the
+     *            runway MID-POINT with the flown turn and glide, need = field + marginFt (the turn back).
      *   'final'  short final to one end: its physical end (e.phys; e.thr when unknown) ahead along the landing
      *            heading by 0 < d <= FINAL_MAX_NM, within FINAL_LATERAL_NM of the extended centreline, track within
      *            FINAL_TRACK_DEG of the landing heading. Straight glide to that point, no turn, no margin
-     *            (needMsl = the end's elevation e.elevFt, the field elevation when unknown), ground speed from the
-     *            wind triangle on the landing heading. The nearest such end when several.
+     *            (needMsl = the end's elevation e.elevFt, the field elevation when unknown), ground speed
+     *            max(tas - headRwy, MIN_FINAL_GS_KT) from the RUNWAY wind (runwayHead); hdgTrue from the glide-wind
+     *            triangle on the landing heading. The nearest such end when several.
      *   'direct' turn toward the nearest point of the nearest runway segment and arrive marginFt above the field.
      *   'ref'    no runway segment: the same to the airport reference point.
      * Glide wind: null -> the assumed noWindHeadwindKt headwind on every course; { headKt } -> that headwind on
-     * every course; { from, kt, gustKt } -> wind triangle, the gust on a course where it is a headwind.
+     * every course; { from, kt, gustKt, noTail } -> wind triangle (triangleR: the lower ground speed of steady /
+     * gust; noTail: no tailwind credit).
      *
      * endId: the chosen end's id ('final'), 'both' for a runway segment ('over' / 'direct'), null for 'ref'.
      * runwayId: the runway of that end / segment, e.g. '06/24'; null for 'ref' or an end without runwayId.
@@ -237,7 +294,7 @@ const GlideModel = (() => {
             && Number.isFinite(e.hdgTrue) && Number.isFinite(e.rwyLenFt) && e.rwyLenFt > 0);
         const segEnds = ends.filter((e) => e.rwy && isPt(e.rwy.a) && isPt(e.rwy.b));
 
-        // ---- Over the runway ----
+        // ---- Over the runway footprint ----
         let over = null;
         for (const e of segEnds) {
             const ux = e.rwy.b.x - e.rwy.a.x, uy = e.rwy.b.y - e.rwy.a.y, len2 = ux * ux + uy * uy;
@@ -246,18 +303,39 @@ const GlideModel = (() => {
             if (!(k > 0 && k < 1)) continue;
             const near = { x: e.rwy.a.x + k * ux, y: e.rwy.a.y + k * uy };
             const offFt = Math.hypot(pos.x - near.x, pos.y - near.y) * FT_PER_NM;
-            if (offFt <= overHalfFt(e) && (!over || offFt < over.offFt)) over = { e, near, offFt };
+            if (offFt <= overHalfFt(e) && (!over || offFt < over.offFt)) over = { e, near, offFt, k };
         }
+        let turnBackTo = null;           // over the footprint but not landable straight ahead: the runway mid-point
         if (over) {
-            // Low over the runway: 'over'. Higher: 'direct' to the point under the aircraft - no initial turn, a zero
-            // leg - so there is no phantom turn toward an abeam point (spec 2026-11-06, rulings).
+            const { e, k } = over;
+            const a = e.rwy.a, b = e.rwy.b;
+            const lenFt = Math.hypot(b.x - a.x, b.y - a.y) * FT_PER_NM;
+            const brgAB = toPolar(b.x - a.x, b.y - a.y).brg;
+            // Lined up: track within LINED_UP_DEG of either runway direction; the runway left ahead runs to that
+            // direction's physical end, and the glide straight ahead is judged from the height above that end.
+            let ahead = null;
+            if (Math.abs(signedDiff(trk, brgAB)) <= LINED_UP_DEG) ahead = { dir: brgAB, end: b, ft: (1 - k) * lenFt };
+            else if (Math.abs(signedDiff(trk, brgAB + 180)) <= LINED_UP_DEG) ahead = { dir: norm(brgAB + 180), end: a, ft: k * lenFt };
+            let roomAhead = false;
+            if (ahead) {
+                const groundFt = endElevAt(segEnds, e, ahead.end, elev);
+                const heightFt = Math.max(0, alt - groundFt);
+                const floatFt = heightFt / sinkNow * floatGsR(ahead.dir, tasNow, glideWind) * KT_TO_FPM;
+                roomAhead = ahead.ft >= floatFt + ROLLOUT_FT;
+            }
             const low = alt - elev <= R.marginFt;
-            const needMsl = low ? elev : elev + R.marginFt;
-            return {
-                kind: low ? 'over' : 'direct', endId: 'both', runwayId: rwyIdOf(over.e), pt: over.near,
-                needMsl, spare: alt - needMsl, hdgTrue: norm(trk), legNm: 0, tMin: 0, target: 0,
-                projected: sinkNow, measured, targetNow: 0, turnNow: 0, headRwy: null, tailwindKt: 0,
-            };
+            const taxi = Number.isFinite(ac.gs) && ac.gs < R.showAboveGsKt;
+            if ((low && (taxi || roomAhead)) || (!low && roomAhead)) {
+                // 'over': on the runway at taxi speed, or low and lined up with room to land ahead.
+                // High pass lined up with room ahead: 'direct' with no turn and a zero leg.
+                const needMsl = low ? elev : elev + R.marginFt;
+                return {
+                    kind: low ? 'over' : 'direct', endId: 'both', runwayId: rwyIdOf(e), pt: over.near,
+                    needMsl, spare: alt - needMsl, hdgTrue: norm(trk), legNm: 0, tMin: 0, target: 0,
+                    projected: sinkNow, measured, targetNow: 0, turnNow: 0, headRwy: null, tailwindKt: 0,
+                };
+            }
+            turnBackTo = { pt: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, runwayId: rwyIdOf(e) };
         }
 
         // ---- Short final: to the end's physical end (the threshold when unknown), at that end's elevation ----
@@ -272,15 +350,17 @@ const GlideModel = (() => {
             if (Math.abs(signedDiff(trk, e.hdgTrue)) > FINAL_TRACK_DEG) continue;
             if (!fin || along < fin.along) fin = { e, tp, along };
         }
-        if (fin) {
+        if (fin && !turnBackTo) {
             const e = fin.e, tp = fin.tp;
             const ground = Number.isFinite(e.elevFt) ? e.elevFt : elev;
             const legNm = Math.hypot(tp.x - pos.x, tp.y - pos.y);
-            const tri = triangleR(R, e.hdgTrue, tasNow, glideWind);
-            const tMin = legNm * 60 / tri.gs;
-            const toLose = alt - ground;
-            const gsNow = Number.isFinite(ac.gs) && ac.gs > 0 ? ac.gs : tri.gs;
+            const tri = triangleR(R, e.hdgTrue, tasNow, glideWind);       // the heading (crab) only
+            // Ground speed on final from the RUNWAY wind along the landing heading (spec 2026-11-06, review rulings).
             const head = runwayHead(R, rw, glideWind, e.hdgTrue);
+            const finalGs = Math.max(tasNow - head, MIN_FINAL_GS_KT);
+            const tMin = legNm * 60 / finalGs;
+            const toLose = alt - ground;
+            const gsNow = Number.isFinite(ac.gs) && ac.gs > 0 ? ac.gs : finalGs;
             return {
                 kind: 'final', endId: e.id, runwayId: rwyIdOf(e), pt: tp,
                 needMsl: ground, spare: toLose - sinkNow * tMin, hdgTrue: norm(tri.hdg), legNm, tMin,
@@ -291,16 +371,21 @@ const GlideModel = (() => {
             };
         }
 
-        // ---- Direct: the nearest point of the nearest runway segment, else the airport reference point ----
+        // ---- Direct: the nearest point of the nearest runway segment (the runway mid-point when over the runway
+        // but not landable straight ahead: the turn back), else the airport reference point ----
         let kind = 'ref', pt = isPt(apt.ref) ? apt.ref : { x: 0, y: 0 }, endId = null, runwayId = null;
-        let bestD = Infinity;
-        for (const e of segEnds) {
-            const ux = e.rwy.b.x - e.rwy.a.x, uy = e.rwy.b.y - e.rwy.a.y, len2 = ux * ux + uy * uy;
-            const k = len2 > 0
-                ? Math.max(0, Math.min(1, ((pos.x - e.rwy.a.x) * ux + (pos.y - e.rwy.a.y) * uy) / len2)) : 0;
-            const near = { x: e.rwy.a.x + k * ux, y: e.rwy.a.y + k * uy };
-            const d = Math.hypot(pos.x - near.x, pos.y - near.y);
-            if (d < bestD) { bestD = d; pt = near; kind = 'direct'; endId = 'both'; runwayId = rwyIdOf(e); }
+        if (turnBackTo) {
+            kind = 'direct'; pt = turnBackTo.pt; endId = 'both'; runwayId = turnBackTo.runwayId;
+        } else {
+            let bestD = Infinity;
+            for (const e of segEnds) {
+                const ux = e.rwy.b.x - e.rwy.a.x, uy = e.rwy.b.y - e.rwy.a.y, len2 = ux * ux + uy * uy;
+                const k = len2 > 0
+                    ? Math.max(0, Math.min(1, ((pos.x - e.rwy.a.x) * ux + (pos.y - e.rwy.a.y) * uy) / len2)) : 0;
+                const near = { x: e.rwy.a.x + k * ux, y: e.rwy.a.y + k * uy };
+                const d = Math.hypot(pos.x - near.x, pos.y - near.y);
+                if (d < bestD) { bestD = d; pt = near; kind = 'direct'; endId = 'both'; runwayId = rwyIdOf(e); }
+            }
         }
         const it = initialTurnR(R, pos, trk, pt, alt, glideWind);
         const leg = toPolar(pt.x - it.pos.x, pt.y - it.pos.y);
