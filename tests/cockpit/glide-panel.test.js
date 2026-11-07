@@ -253,6 +253,20 @@ describe('GlidePanel verdicts', () => {
         expect(cellText('TO')).toBe('RWY 06 on final');
     });
 
+    it('crossing the runway at right angles 400 ft up: a turn back, TO note "turn back", not "nearest part"', () => {
+        sit = overRwy(0.5, 486 + 400, 149);
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        const plan = panel.render(NOW);
+        expect(plan.kind).toBe('direct');
+        expect(plan.turnBack).toBe(true);
+        expect(cellText('TO')).toBe('RWY 06/24 turn back');
+        // an ordinary approach from outside keeps "nearest part"
+        sit = situation(180, 6, 5500, 360);
+        expect(panel.render(NOW).turnBack).toBe(false);
+        expect(cellText('TO')).toBe('RWY 06/24 nearest part');
+    });
+
     it('low over the runway: "✓ OVER RWY 06/24", green, no grid, no map line', () => {
         sit = overRwy(0.5, 490, 59);
         panel = new GlidePanel(host, KLKR);
