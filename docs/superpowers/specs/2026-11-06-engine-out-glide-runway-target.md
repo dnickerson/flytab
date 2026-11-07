@@ -101,6 +101,29 @@ headwind (it has no per-airport METAR); it gets decision 1 through `plan()`.
 - 20:03:14 (last second of the downwind) is −51 ft under VRB/04 (+11 at 20:03:10): the
   200 ft margin decides it; not tuned.
 
+### Rulings after the critical review (2026-11-06) — supersede the high-pass ruling above
+The review found the high-pass ruling optimistic: on the climbout over the departure end
+(track 059, k = 0.999, 600 ft) it said GLIDE OK +400 where one second later (off the end)
+it is −159 with a 179° turn — the impossible turn; crossing the runway at right angles at
+400 ft it said +200. Over the runway footprint (lateral gate and 0 < k < 1):
+- **Lined up** = track within 30° of either runway direction; `dir` = that direction;
+  `aheadFt` = runway left ahead along `dir` (to that end's physical end);
+  `needAheadFt` = straight-glide distance from the current height above the end ahead
+  (ground speed from the triangle along `dir`, sink at altitude) + **ROLLOUT_FT = 1,000**.
+- `kind 'over'` (alt − elev ≤ marginFt): when `gs < showAboveGsKt` (on the runway at taxi
+  speed), or lined up with `aheadFt ≥ needAheadFt`.
+- High pass (alt − elev > marginFt): zero leg / no turn only when lined up with
+  `aheadFt ≥ needAheadFt`; `spare = alt − elev − marginFt`.
+- Otherwise (not lined up, or not enough runway ahead): `kind 'direct'` to the **runway
+  mid-point** with the normal flown turn and glide (need = field + margin) — the turn back.
+- **Short final ground speed** uses the runway wind along the landing heading
+  (`gs = max(tas − headRwy, 20)`, `headRwy = runwayHead()`), not the glide wind.
+- **Surface wind on the glide legs never helps:** for a surface METAR vector, a tailwind
+  component counts as 0 (`noTail`); with a gust, the triangle is solved with the steady
+  and the gust speed and the **lower** ground speed is used (both for winds aloft gusts
+  if any, and surface).
+- Open (Dana): the surface wind is used at any height when there are no winds aloft.
+
 ## Acceptance (the 11-06 flight, VRB 04 surface wind, 200 ft margin)
 - Downwind 20:02:11-20:03:10: GLIDE OK. (20:03:14 may be within a few ft either side.)
 - Base at 20:04:01 (569 ft AGL, 0.8 nm): CANNOT REACH (genuinely marginal).
