@@ -132,6 +132,18 @@ it is −159 with a 179° turn — the impossible turn; crossing the runway at r
 - ~~Open (Dana): the surface wind is used at any height when there are no winds aloft.~~
   Decided below.
 
+### Re-review ruling N1 (2026-11-06): the turn back is always behind
+The mid-point target can be AHEAD (lined up over the first half, too high to land in what
+is left): the "turn back" was a straight glide forward reading GLIDE OK (+175 at k 0.2 /
+600 ft) and flipped to −356 five seconds past mid-field. Ruling: over the footprint, when
+lined up but without enough runway ahead, the target is the **physical end behind the
+aircraft** along `dir` (the end it is moving away from), with the normal flown turn and
+glide (need = field + margin). Only when NOT lined up (crossing) is the target the runway
+mid-point. Accepted cost: pessimistic where a slip or a 360 would make it (never
+optimistic); near the departure end it reads lower than one second later off the end.
+Manual: the "METAR tailwind never counted" statement is about the glide legs; short final
+uses the runway wind (tailwind included); drop "never shown as made when it is not".
+
 ### Surface wind only in the lowest 1,000 ft (Dana 2026-11-06)
 Dana: *"the wind tends to be stronger the higher I fly. Ground friction reduces the wind.
 Also, time of day: in the morning the wind can be stronger at altitude than on the
