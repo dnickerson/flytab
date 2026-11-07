@@ -257,8 +257,9 @@ const GlideModel = (() => {
      *            target 0, targetNow 0, hdgTrue = track, turnNow 0.
      *            High pass (alt - elev > marginFt) with roomAhead: kind 'direct' with those zero-leg numbers,
      *            needMsl = elev + marginFt, spare = alt - elev - marginFt.
-     *            Anything else on the footprint (not lined up, or not enough runway ahead): kind 'direct' to the
-     *            runway MID-POINT with the flown turn and glide, need = field + marginFt (the turn back).
+     *            Anything else on the footprint: the turn back, kind 'direct' with the flown turn and glide, need =
+     *            field + marginFt - to the physical end BEHIND the aircraft along dir when lined up without room
+     *            ahead (ruling N1), to the runway MID-POINT when not lined up (crossing).
      *   'final'  short final to one end: its physical end (e.phys; e.thr when unknown) ahead along the landing
      *            heading by 0 < d <= FINAL_MAX_NM, within FINAL_LATERAL_NM of the extended centreline, track within
      *            FINAL_TRACK_DEG of the landing heading. Straight glide to that point, no turn, no margin
@@ -305,7 +306,7 @@ const GlideModel = (() => {
             const offFt = Math.hypot(pos.x - near.x, pos.y - near.y) * FT_PER_NM;
             if (offFt <= overHalfFt(e) && (!over || offFt < over.offFt)) over = { e, near, offFt, k };
         }
-        let turnBackTo = null;           // over the footprint but not landable straight ahead: the runway mid-point
+        let turnBackTo = null;           // over the footprint, not landable straight ahead: the end behind / the mid-point
         if (over) {
             const { e, k } = over;
             const a = e.rwy.a, b = e.rwy.b;
@@ -314,8 +315,8 @@ const GlideModel = (() => {
             // Lined up: track within LINED_UP_DEG of either runway direction; the runway left ahead runs to that
             // direction's physical end, and the glide straight ahead is judged from the height above that end.
             let ahead = null;
-            if (Math.abs(signedDiff(trk, brgAB)) <= LINED_UP_DEG) ahead = { dir: brgAB, end: b, ft: (1 - k) * lenFt };
-            else if (Math.abs(signedDiff(trk, brgAB + 180)) <= LINED_UP_DEG) ahead = { dir: norm(brgAB + 180), end: a, ft: k * lenFt };
+            if (Math.abs(signedDiff(trk, brgAB)) <= LINED_UP_DEG) ahead = { dir: brgAB, end: b, behind: a, ft: (1 - k) * lenFt };
+            else if (Math.abs(signedDiff(trk, brgAB + 180)) <= LINED_UP_DEG) ahead = { dir: norm(brgAB + 180), end: a, behind: b, ft: k * lenFt };
             let roomAhead = false;
             if (ahead) {
                 const groundFt = endElevAt(segEnds, e, ahead.end, elev);
@@ -335,7 +336,9 @@ const GlideModel = (() => {
                     projected: sinkNow, measured, targetNow: 0, turnNow: 0, headRwy: null, tailwindKt: 0,
                 };
             }
-            turnBackTo = { pt: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, runwayId: rwyIdOf(e) };
+            // The turn back (re-review ruling N1): lined up without room ahead -> the physical end BEHIND the aircraft
+            // (never a point ahead, which would be a straight glide forward reading GLIDE OK); crossing -> the mid-point.
+            turnBackTo = { pt: ahead ? ahead.behind : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, runwayId: rwyIdOf(e) };
         }
 
         // ---- Short final: to the end's physical end (the threshold when unknown), at that end's elevation ----
@@ -371,8 +374,8 @@ const GlideModel = (() => {
             };
         }
 
-        // ---- Direct: the nearest point of the nearest runway segment (the runway mid-point when over the runway
-        // but not landable straight ahead: the turn back), else the airport reference point ----
+        // ---- Direct: the nearest point of the nearest runway segment (the turn-back point when over the runway
+        // but not landable straight ahead), else the airport reference point ----
         let kind = 'ref', pt = isPt(apt.ref) ? apt.ref : { x: 0, y: 0 }, endId = null, runwayId = null;
         if (turnBackTo) {
             kind = 'direct'; pt = turnBackTo.pt; endId = 'both'; runwayId = turnBackTo.runwayId;

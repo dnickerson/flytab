@@ -135,9 +135,27 @@ describe('the critical review probes on the real KLKR record (VRB 04)', () => {
             expect(zeroLeg(on)).toBe(false);
             expect(Math.abs(on.turnNow)).toBeGreaterThan(170);
             expect(on.spare).toBeLessThanOrEqual(off.spare);
-            expect(on.spare).toBeGreaterThan(off.spare - 200);
+            expect(on.pt.x).toBeCloseTo(A.x, 12);                         // N1: the physical end behind (06)
+            expect(on.pt.y).toBeCloseTo(A.y, 12);
         }
         expect(P(at(0.999), 600, 59, 80).spare).toBeLessThan(0);          // never GLIDE OK at 600 ft
+    });
+
+    it('N1: a straight glide along 06 from k 0.2 / 600, k 0.1 / 800, k 0 / 1,000 ft: the target is never ahead, no jump', () => {
+        const kOf = (pt) => ((pt.x - A.x) * (B.x - A.x) + (pt.y - A.y) * (B.y - A.y)) / ((B.x - A.x) ** 2 + (B.y - A.y) ** 2);
+        for (const [k0, h0] of [[0.2, 600], [0.1, 800], [0.001, 1000]]) {
+            let prev = null;
+            for (let k = k0, h = h0; k < 1 && h > 0; k += 200 / LEN_FT) {
+                const p = P(at(k), h, BRG, 70);
+                expect(kOf(p.pt), `${k0}/${h0} at k ${k.toFixed(3)}`).toBeLessThanOrEqual(k + 1e-9);
+                if (prev) expect(Math.abs(p.spare - prev.spare), `${k0}/${h0} at k ${k.toFixed(3)}`).toBeLessThan(60);
+                prev = p;
+                const alt = KLKR.elev_ft + h;
+                h -= 200 / ((GlideModel.tasAt(alt, S) - 4) * 101.269) * GlideModel.sinkAt(alt, S);
+            }
+        }
+        // from k 0.2 / 600 ft: CANNOT REACH from the start (the old mid-point target read GLIDE OK +197 here)
+        expect(P(at(0.2), 600, BRG, 70).spare).toBeLessThan(0);
     });
 
     it('crossing at right angles at 400 ft, 199 ft off the centreline: the turn back, not +200', () => {

@@ -434,6 +434,11 @@ describe('GlideModel', () => {
         const needAheadFt = (alt, heightFt) => heightFt / GlideModel.sinkAt(alt, S()) * GlideModel.tasAt(alt, S()) * 101.269 + 1000;
         /** The turn back: the same aircraft planned to the runway mid-point (the reference point here) - a 'ref' plan. */
         const toMid = (o) => GlideModel.plan(input({ ...o, airport: { elevFt: ELEV, ref: { x: 0, y: 0 }, ends: [] } }), S());
+        /** The same aircraft planned to point `pt` (a 'ref' plan there: the flown turn + glide, need = field + margin). */
+        const toPt = (o, pt) => GlideModel.plan(input({ ...o, airport: { elevFt: ELEV, ref: pt, ends: [] } }), S());
+        const SW = fromPolar(RWY_TRUE, half), NE = fromPolar(RWY_TRUE + 180, half);
+        /** How far along 053 (as a fraction from the SW end) a point lies. */
+        const kOf = (pt) => ((pt.x - SW.x) * (NE.x - SW.x) + (pt.y - SW.y) * (NE.y - SW.y)) / ((NE.x - SW.x) ** 2 + (NE.y - SW.y) ** 2);
         const zeroLeg = (p) => p.legNm === 0 && p.turnNow === 0 && p.tMin === 0;
         const P = (o) => GlideModel.plan(input(o), S());
 
@@ -546,7 +551,9 @@ describe('GlideModel', () => {
             const short = P(o);
             expect(short.kind).toBe('direct');
             expect(zeroLeg(short)).toBe(false);
-            expect(short.spare).toBeCloseTo(toMid(o).spare, 9);
+            // N1: the turn back goes to the physical end BEHIND the aircraft (the SW end, tracking 053)
+            expect(short.pt).toEqual(SW);
+            expect(short.spare).toBeCloseTo(toPt(o, SW).spare, 9);
             expect(short.spare).toBeLessThan(100);
             // the margin setting moves the over / high-pass line
             const s5 = S(); s5.pilot.marginFt = 500;
@@ -563,10 +570,59 @@ describe('GlideModel', () => {
                 expect(zeroLeg(on), `${agl}`).toBe(false);
                 expect(Math.abs(on.turnNow)).toBeGreaterThan(170);           // the turn back
                 expect(Math.abs(off.turnNow)).toBeGreaterThan(170);
-                expect(on.spare).toBeLessThanOrEqual(off.spare);            // the mid-point is farther than the end
-                expect(on.spare).toBeGreaterThan(off.spare - 200);           // ~ the same turn back
+                expect(on.spare).toBeLessThanOrEqual(off.spare);            // never better than off the end
+                // N1: lined up without room ahead -> the end behind (the whole runway back); accepted to read lower
+                // than one second later off the end
+                expect(on.pt).toEqual(SW);
                 if (agl === 600) { expect(on.spare).toBeLessThan(0); expect(off.spare).toBeLessThan(0); }   // never GLIDE OK
             }
+        });
+
+        describe('re-review ruling N1: the turn back is always behind', () => {
+            /** A straight glide along 053 from (k0, h0 above the field), stepping 200 ft at the model's glide rate. */
+            const path = (k0, h0) => {
+                const out = [];
+                for (let k = k0, h = h0; k < 1 && h > 0; k += 200 / RWY_LEN) {
+                    const alt = ELEV + h;
+                    const o = { pos: onRwy(k), alt, trk: 53, gs: 70 };
+                    out.push({ k, h, p: P(o), o });
+                    h -= 200 / ((GlideModel.tasAt(alt, S()) - 10) * 101.269) * GlideModel.sinkAt(alt, S());
+                }
+                return out;
+            };
+            const STARTS = [[0.2, 600], [0.1, 800], [0.001, 1000]];
+
+            it('the target is never ahead of the aircraft along the runway direction', () => {
+                for (const [k0, h0] of STARTS) {
+                    const steps = path(k0, h0);
+                    expect(steps.length).toBeGreaterThan(20);
+                    for (const { k, h, p } of steps) {
+                        expect(kOf(p.pt), `k0 ${k0} h0 ${h0}: k ${k.toFixed(3)} h ${h.toFixed(0)}`).toBeLessThanOrEqual(k + 1e-9);
+                    }
+                }
+            });
+
+            it('no green -> red flip from a target ahead: GLIDE OK only as a turn back, spare never jumps', () => {
+                for (const [k0, h0] of STARTS) {
+                    const steps = path(k0, h0);
+                    for (let i = 0; i < steps.length; i++) {
+                        const { p, k } = steps[i];
+                        if (p.spare >= 0 && p.legNm > 0) expect(kOf(p.pt)).toBeLessThan(k);     // green = turn back
+                        if (i > 0) {
+                            const d = p.spare - steps[i - 1].p.spare;
+                            expect(Math.abs(d), `k0 ${k0}: step ${i}`).toBeLessThan(60);        // the old mid-point jumped ~550 ft
+                            expect(d, `k0 ${k0}: step ${i}`).toBeLessThan(15);                   // gliding away only loses
+                        }
+                    }
+                }
+                // from k 0.2 / 600 ft it is CANNOT REACH from the start (never green then red)
+                expect(path(0.2, 600).every(({ p }) => p.spare < 0)).toBe(true);
+            });
+
+            it('crossing (not lined up): still the mid-point', () => {
+                const p = P({ pos: onRwy(0.2), alt: ELEV + 600, trk: 143, gs: 70 });
+                expect(Math.hypot(p.pt.x, p.pt.y)).toBeLessThan(1e-12);
+            });
         });
 
         it('review probe - crossing at right angles at 400 ft, 199 ft off the centreline: the turn back, not +200', () => {
