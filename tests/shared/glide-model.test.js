@@ -493,14 +493,14 @@ describe('GlideModel', () => {
             expect(P({ pos: onRwy(0.7), alt: ELEV - 5, trk: 233, gs: 40 }).kind).toBe('over');
         });
 
-        it('taxi speed (gs < showAboveGsKt, default 25): OVER at any track; above it, crossing is not', () => {
+        it('taxi speed (gs < 25 kt): OVER at any track; above it, crossing is not', () => {
             expect(P({ pos: onRwy(0.5), alt: ELEV, trk: 143, gs: 10 }).kind).toBe('over');
             expect(P({ pos: onRwy(0.99), alt: ELEV, trk: 53, gs: 24 }).kind).toBe('over');     // even at the very end
             const fast = P({ pos: onRwy(0.5), alt: ELEV, trk: 143, gs: 30 });
             expect(fast.kind).toBe('direct');
-            // showAboveGsKt is read from the pilot settings
+            // a fixed 25 kt since the Decision A review (2026-11-08), not the display gate showAboveGsKt
             const s35 = S(); s35.pilot.showAboveGsKt = 35;
-            expect(GlideModel.plan(input({ pos: onRwy(0.5), alt: ELEV, trk: 143, gs: 30 }), s35).kind).toBe('over');
+            expect(GlideModel.plan(input({ pos: onRwy(0.5), alt: ELEV, trk: 143, gs: 30 }), s35).kind).toBe('direct');
             // no ground speed known: never taxi
             expect(P({ pos: onRwy(0.5), alt: ELEV + 10, trk: 143, gs: NaN }).kind).toBe('direct');
         });
@@ -889,6 +889,74 @@ describe('Decision A (Dana, 2026-11-08): no false CANNOT REACH on the runway or 
         });
         it('crossing that runway NOT on a final (track 143 along nothing): still the turn back to its mid-point', () => {
             const p = P({ ...at, trk: 200, airport: crossing() });   // 33 deg off 233: not a final, not lined up with 14/32
+            expect(p.kind).toBe('direct');
+            expect(p.turnBack).toBe(true);
+        });
+    });
+});
+
+describe('Decision A review fixes: the rolling gate is a ground test; intersections; taxi gate; N1 kept', () => {
+    const half = RWY_LEN / 2 / FT_PER_NM;
+    const SW = fromPolar(RWY_TRUE, half), NE = fromPolar(RWY_TRUE + 180, half);
+    const onRwy = (k) => ({ x: SW.x + k * (NE.x - SW.x), y: SW.y + k * (NE.y - SW.y) });
+    const P = (o, s = S()) => GlideModel.plan(input(o), s);
+    const near900 = onRwy(1 - 900 / RWY_LEN);
+
+    it('airborne slow (headwind) at 150 ft, lined up, too little runway: NOT over - only within 100 ft of the runway counts', () => {
+        const p = P({ pos: near900, alt: ELEV + 150, trk: 53, gs: 45 });
+        expect(p.kind).toBe('direct');
+        expect(p.turnBack).toBe(true);
+    });
+    it('a raised marginFt (1,000 ft) does not widen it: 800 ft up, slow, lined up -> not over', () => {
+        const s = S(); s.pilot.marginFt = 1000;
+        expect(P({ pos: near900, alt: ELEV + 800, trk: 53, gs: 45 }, s).kind).toBe('direct');
+    });
+    it('marginFt 0 does not disable it: rollout at 40 kt, GPS 30 ft high -> OVER', () => {
+        const s = S(); s.pilot.marginFt = 0;
+        expect(P({ pos: near900, alt: ELEV + 30, trk: 53, gs: 40 }, s).kind).toBe('over');
+    });
+
+    describe('intersection: rolling along A over crossing runway B\'s centreline', () => {
+        const at = onRwy(0.5), xHalf = 2000 / FT_PER_NM, right20 = fromPolar(143, 20 / FT_PER_NM);
+        const pos = { x: at.x + right20.x, y: at.y + right20.y };     // 20 ft right of A's centreline, on B's
+        const xa = { x: pos.x + fromPolar(323, xHalf).x, y: pos.y + fromPolar(323, xHalf).y };
+        const xb = { x: pos.x + fromPolar(143, xHalf).x, y: pos.y + fromPolar(143, xHalf).y };
+        const two = () => {
+            const base = klkr();
+            const mkX = (id, hdg, thr) => ({ id, thr, hdgTrue: hdg, rwyLenFt: 4000, mid: pos, rwy: { a: xa, b: xb }, runwayId: '14/32' });
+            return { ...base, ends: [...base.ends, mkX('14', 143, xa), mkX('32', 323, xb)] };
+        };
+        it('rollout at 40 kt, 900 ft... any runway left: OVER on A (the lined-up footprint), not a turn to B\'s middle', () => {
+            const p = P({ pos, alt: ELEV, trk: 53, gs: 40, airport: two() });
+            expect(p.kind).toBe('over');
+        });
+        it('crossing B along B\'s direction is lined up with B: also OVER (taxi-fast)', () => {
+            expect(P({ pos, alt: ELEV, trk: 143, gs: 40, airport: two() }).kind).toBe('over');
+        });
+    });
+
+    it('taxi gate is a fixed 25 kt, not the display setting showAboveGsKt (0 no longer breaks it)', () => {
+        const s = S(); s.pilot.showAboveGsKt = 0;
+        expect(P({ pos: onRwy(0.5), alt: ELEV, trk: 143, gs: 10 }, s).kind).toBe('over');
+        const s35 = S(); s35.pilot.showAboveGsKt = 35;
+        expect(P({ pos: onRwy(0.5), alt: ELEV, trk: 143, gs: 30 }, s35).kind).toBe('direct');
+    });
+
+    describe('short final precedence only over a CROSSING runway\'s turn back (ruling N1 kept when lined up)', () => {
+        // A staggered parallel 300 ft to the side, starting 0.3 nm past our NE end: its 6R threshold (landing 053)
+        // is AHEAD of an aircraft climbing out over the end of 06/24, within the short-final gates.
+        const side = fromPolar(RWY_TRUE + 90, 300 / FT_PER_NM), gap = fromPolar(53, 0.3), len = fromPolar(53, RWY_LEN / FT_PER_NM);
+        const pa = { x: NE.x + side.x + gap.x, y: NE.y + side.y + gap.y };
+        const pb = { x: pa.x + len.x, y: pa.y + len.y };
+        const par = () => {
+            const base = klkr();
+            const mkP = (id, hdg, thr) => ({ id, thr, hdgTrue: hdg, rwyLenFt: RWY_LEN, mid: { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 }, rwy: { a: pa, b: pb }, runwayId: '6R/24L' });
+            return { ...base, ends: [...base.ends, mkP('6R', 53, pa), mkP('24L', 233, pb)] };
+        };
+        it('lined up over 06/24 near its NE end climbing out at 150 ft: the turn back behind, not a glide ahead to the staggered parallel', () => {
+            const fin = GlideModel.plan(input({ pos: onRwy(1 - 800 / RWY_LEN), alt: ELEV + 150, trk: 53, gs: 70, airport: { ...par(), ends: par().ends.slice(2) } }), S());
+            expect(fin.kind).toBe('final');                       // the parallel alone: a valid short final (the gates hold)
+            const p = P({ pos: onRwy(1 - 800 / RWY_LEN), alt: ELEV + 150, trk: 53, gs: 70, airport: par() });
             expect(p.kind).toBe('direct');
             expect(p.turnBack).toBe(true);
         });

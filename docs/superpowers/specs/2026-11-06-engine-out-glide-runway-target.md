@@ -194,3 +194,17 @@ Pre-merge review of PR #209 found two places that read red where the aircraft co
    back (`if (fin)`); the turn back stays for "over a runway, nothing landable ahead". A short
    final can never be to the runway the aircraft is over and lined up with (its threshold is
    behind), so this only affects crossing runways.
+
+Review of the Decision A commit (same day), fixed:
+- The rolling gate was ANDed with `low` (alt − elev ≤ marginFt, up to 2,000 ft): a raised margin
+  or a slow climb-out into a headwind read OVER in the air. Now `rolling` = lined up AND within
+  `ON_GROUND_FT` (100 ft, GPS altitude noise) of the end ahead's elevation AND gs < vs1_kt,
+  independent of marginFt; such an `over` has needMsl = elev.
+- Several footprints (intersections): a lined-up one is chosen first, then the nearest
+  centreline — rolling along A across B's centreline is on A.
+- The taxi gate is a fixed `TAXI_MAX_GS_KT` 25, no longer the display setting showAboveGsKt
+  (a stored 0 made taxiing across a runway a turn back).
+- `final` wins only over a CROSSING runway's turn back. Lined up over a runway without room
+  ahead keeps the turn back behind (ruling N1) — e.g. a staggered parallel's threshold ahead.
+- Not changed: aircraft-config has both `vso_kt` (48) and `vs0_kt` (42) beside `vs1_kt`; the
+  model reads `performance.vs1_kt` only.

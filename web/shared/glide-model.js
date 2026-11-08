@@ -48,6 +48,8 @@ const GlideModel = (() => {
     // ---- Over the runway (spec 2026-11-06, rulings after the critical review) ----
     const LINED_UP_DEG = 30;            // over the runway, "lined up": track within this of either runway direction
     const ROLLOUT_FT = 1000;            // runway needed after touchdown, added to the straight-glide distance ahead
+    const TAXI_MAX_GS_KT = 25;          // on the runway at taxi speed: OVER at any track (was the display gate showAboveGsKt)
+    const ON_GROUND_FT = 100;           // "rolling": within this of the runway end's elevation (GPS altitude noise), any margin
 
     /**
      * The agreed RV-9A defaults. Aircraft values persist via flypi_user_aircraft, pilot values via cockpit-config.
@@ -282,16 +284,17 @@ const GlideModel = (() => {
      *            runway left ahead along dir, to that direction's physical end; needAheadFt = the straight glide
      *            from the height above that end (its NASR elevation, else the field's) at floatGsR() along dir,
      *            sink at altitude, + ROLLOUT_FT. roomAhead = lined up and aheadFt >= needAheadFt.
-     *   'over'   on the footprint, alt - elev <= marginFt, and gs < showAboveGsKt (taxi speed), lined up with
-     *            gs < vs1_kt (rolling along it below stall speed: rollout, takeoff roll), or roomAhead:
+     *   'over'   on the footprint and either rolling (lined up, within ON_GROUND_FT of the end ahead's
+     *            elevation, gs < vs1_kt: rollout / takeoff roll), or alt - elev <= marginFt with gs <
+     *            TAXI_MAX_GS_KT (taxi speed) or roomAhead. Several footprints: a lined-up one first:
      *            needMsl = elev, spare = alt - elev, pt = the runway point under the aircraft, legNm 0, tMin 0,
      *            target 0, targetNow 0, hdgTrue = track, turnNow 0.
      *            High pass (alt - elev > marginFt) with roomAhead: kind 'direct' with those zero-leg numbers,
      *            needMsl = elev + marginFt, spare = alt - elev - marginFt.
      *            Anything else on the footprint: the turn back, kind 'direct' with the flown turn and glide, need =
      *            field + marginFt - to the physical end BEHIND the aircraft along dir when lined up without room
-     *            ahead (ruling N1), to the runway MID-POINT when not lined up (crossing) - unless a valid
-     *            'final' (below) applies: a short final wins over crossing another runway's pavement.
+     *            ahead (ruling N1), to the runway MID-POINT when not lined up (crossing) - when crossing, a
+     *            valid 'final' (below) to another runway wins over the turn back.
      *   'final'  short final to one end: its physical end (e.phys; e.thr when unknown) ahead along the landing
      *            heading by 0 < d <= FINAL_MAX_NM, within FINAL_LATERAL_NM of the extended centreline, track within
      *            FINAL_TRACK_DEG of the landing heading. Straight glide to that point, no turn, no margin
@@ -338,7 +341,12 @@ const GlideModel = (() => {
             if (!(k > 0 && k < 1)) continue;
             const near = { x: e.rwy.a.x + k * ux, y: e.rwy.a.y + k * uy };
             const offFt = Math.hypot(pos.x - near.x, pos.y - near.y) * FT_PER_NM;
-            if (offFt <= overHalfFt(e) && (!over || offFt < over.offFt)) over = { e, near, offFt, k };
+            if (offFt > overHalfFt(e)) continue;
+            // At an intersection prefer a runway the aircraft is lined up with (rolling along A across B's
+            // centreline is on A), then the nearest centreline.
+            const brg = toPolar(ux, uy).brg;
+            const lined = Math.abs(signedDiff(trk, brg)) <= LINED_UP_DEG || Math.abs(signedDiff(trk, brg + 180)) <= LINED_UP_DEG;
+            if (!over || (lined && !over.lined) || (lined === over.lined && offFt < over.offFt)) over = { e, near, offFt, k, lined };
         }
         let turnBackTo = null;           // over the footprint, not landable straight ahead: the end behind / the mid-point
         if (over) {
@@ -351,31 +359,35 @@ const GlideModel = (() => {
             let ahead = null;
             if (Math.abs(signedDiff(trk, brgAB)) <= LINED_UP_DEG) ahead = { dir: brgAB, end: b, behind: a, ft: (1 - k) * lenFt };
             else if (Math.abs(signedDiff(trk, brgAB + 180)) <= LINED_UP_DEG) ahead = { dir: norm(brgAB + 180), end: a, behind: b, ft: k * lenFt };
-            let roomAhead = false;
+            let roomAhead = false, onGround = false;
             if (ahead) {
                 const groundFt = endElevAt(segEnds, e, ahead.end, elev);
                 const heightFt = Math.max(0, alt - groundFt);
+                onGround = alt - groundFt <= ON_GROUND_FT;
                 const floatFt = heightFt / sinkNow * floatGsR(ahead.dir, tasNow, glideWind) * KT_TO_FPM;
                 roomAhead = ahead.ft >= floatFt + ROLLOUT_FT;
             }
             const low = alt - elev <= R.marginFt;
-            const taxi = Number.isFinite(ac.gs) && ac.gs < R.showAboveGsKt;
-            // Decision A (Dana, 2026-11-08): rolling ALONG the runway below stall speed cannot be flying - a long
-            // landing's rollout or a late takeoff roll is on the runway, not a 180-degree turn back (CANNOT REACH).
-            const rolling = !!ahead && Number.isFinite(ac.gs) && ac.gs < R.vs1Kt;
-            if ((low && (taxi || rolling || roomAhead)) || (!low && roomAhead)) {
+            const taxi = Number.isFinite(ac.gs) && ac.gs < TAXI_MAX_GS_KT;
+            // Decision A (Dana, 2026-11-08): rolling ALONG the runway below stall speed, within ON_GROUND_FT of it,
+            // cannot be flying - a long landing's rollout or a late takeoff roll is on the runway, not a 180-degree
+            // turn back (CANNOT REACH). A height test of its own, not marginFt (review: a raised margin or a slow
+            // climb-out into a headwind would otherwise read OVER in the air).
+            const rolling = onGround && Number.isFinite(ac.gs) && ac.gs < R.vs1Kt;
+            if (rolling || (low && (taxi || roomAhead)) || (!low && roomAhead)) {
                 // 'over': on the runway at taxi speed, rolling along it below vs1, or low and lined up with room ahead.
                 // High pass lined up with room ahead: 'direct' with no turn and a zero leg.
-                const needMsl = low ? elev : elev + R.marginFt;
+                const asOver = low || rolling;
+                const needMsl = asOver ? elev : elev + R.marginFt;
                 return {
-                    kind: low ? 'over' : 'direct', endId: 'both', runwayId: rwyIdOf(e), pt: over.near,
+                    kind: asOver ? 'over' : 'direct', endId: 'both', runwayId: rwyIdOf(e), pt: over.near,
                     needMsl, spare: alt - needMsl, hdgTrue: norm(trk), legNm: 0, tMin: 0, target: 0,
                     projected: sinkNow, measured, targetNow: 0, turnNow: 0, headRwy: null, tailwindKt: 0,
                 };
             }
             // The turn back (re-review ruling N1): lined up without room ahead -> the physical end BEHIND the aircraft
             // (never a point ahead, which would be a straight glide forward reading GLIDE OK); crossing -> the mid-point.
-            turnBackTo = { pt: ahead ? ahead.behind : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, runwayId: rwyIdOf(e) };
+            turnBackTo = { pt: ahead ? ahead.behind : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, runwayId: rwyIdOf(e), linedUp: !!ahead };
         }
 
         // ---- Short final: to the end's physical end (the threshold when unknown), at that end's elevation ----
@@ -390,9 +402,10 @@ const GlideModel = (() => {
             if (Math.abs(signedDiff(trk, e.hdgTrue)) > FINAL_TRACK_DEG) continue;
             if (!fin || along < fin.along) fin = { e, tp, along };
         }
-        // A valid short final wins over a turn back to a runway whose pavement the aircraft is crossing
-        // (Decision A, 2026-11-08): the turn back is for "over a runway, nothing landable ahead".
-        if (fin) {
+        // A valid short final wins over a turn back to a runway whose pavement the aircraft is CROSSING
+        // (Decision A, 2026-11-08). Lined up over a runway without room ahead keeps the turn back behind
+        // (ruling N1: never a straight glide to a point ahead, e.g. a staggered parallel's threshold).
+        if (fin && !(turnBackTo && turnBackTo.linedUp)) {
             const e = fin.e, tp = fin.tp;
             const ground = Number.isFinite(e.elevFt) ? e.elevFt : elev;
             const legNm = Math.hypot(tp.x - pos.x, tp.y - pos.y);
