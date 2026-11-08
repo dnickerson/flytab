@@ -853,9 +853,13 @@ class Logbook {
      * a day's entries happened to come first.
      */
     static compareNewestFirst(a, b) {
-        const day = (e) => e.date || e.created_at || '';
+        // An entry with no date goes by created_at's day (and its time when it has no out time), not by
+        // the whole timestamp, which would sort it above every dated entry that day.
+        const day = (e) => e.date || String(e.created_at || '').slice(0, 10);
         const time = (e) => {
-            const m = String(e.time_out ?? '').match(/^(\d{1,2}):(\d{2})/);
+            // The Out field is free text: "18:09Z", "21:26", or typed "1809".
+            const m = String(e.time_out ?? '').match(/^(\d{1,2}):?(\d{2})/)
+                || (!e.date && String(e.created_at || '').match(/T(\d{2}):(\d{2})/));
             return m ? m[1].padStart(2, '0') + ':' + m[2] : '';
         };
         const desc = (x, y) => (x < y ? 1 : x > y ? -1 : 0);

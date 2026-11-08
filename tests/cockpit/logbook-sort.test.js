@@ -52,6 +52,16 @@ describe('logbook order: newest date, then newest out time', () => {
             .toEqual(['nodate', 'dated']);
     });
 
+    it('reads a typed out time without the colon ("1809", "1809Z", "809")', () => {
+        expect(sorted([e('noon', '2026-02-02', '12:00'), e('typed', '2026-02-02', '1809'), e('typedZ', '2026-02-02', '1700Z'), e('early', '2026-02-02', '809')]))
+            .toEqual(['typed', 'typedZ', 'noon', 'early']);
+    });
+
+    it('an entry with no date sorts by the day and time of created_at, not above the whole day', () => {
+        expect(sorted([e('nodate-0900', undefined, undefined, '2026-03-05T09:00:00Z'), e('dated-2000', '2026-03-05', '20:00Z')]))
+            .toEqual(['dated-2000', 'nodate-0900']);
+    });
+
     it('keeps the stored order for entries that tie completely (stable sort)', () => {
         expect(sorted([e('x', '2026-02-26', ''), e('y', '2026-02-26', ''), e('z', '2026-02-26', '')])).toEqual(['x', 'y', 'z']);
     });
