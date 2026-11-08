@@ -827,3 +827,70 @@ describe('GlideModel', () => {
         });
     });
 });
+
+describe('Decision A (Dana, 2026-11-08): no false CANNOT REACH on the runway or on a short final', () => {
+    const half = RWY_LEN / 2 / FT_PER_NM;
+    const SW = fromPolar(RWY_TRUE, half), NE = fromPolar(RWY_TRUE + 180, half);
+    /** On the centreline, `k` of the way from the SW physical end to the NE one. */
+    const onRwy = (k) => ({ x: SW.x + k * (NE.x - SW.x), y: SW.y + k * (NE.y - SW.y) });
+    const P = (o, s = S()) => GlideModel.plan(input(o), s);
+
+    describe('1. rolling along the runway below stall speed (vs1_kt) is OVER, whatever runway is left', () => {
+        it('landed long: rollout at 40 kt with 900 ft left -> OVER (was a 180-degree turn, CANNOT REACH)', () => {
+            const p = P({ pos: onRwy(1 - 900 / RWY_LEN), alt: ELEV, trk: 53, gs: 40 });
+            expect(p.kind).toBe('over');
+            expect(p.spare).toBe(0);
+        });
+        it('late in a takeoff roll at 47 kt, 600 ft left -> OVER; either direction', () => {
+            expect(P({ pos: onRwy(1 - 600 / RWY_LEN), alt: ELEV + 5, trk: 53, gs: 47 }).kind).toBe('over');
+            expect(P({ pos: onRwy(600 / RWY_LEN), alt: ELEV + 5, trk: 233, gs: 47 }).kind).toBe('over');
+        });
+        it('at or above vs1 (48 kt default) with too little runway: still the turn back, as before', () => {
+            const p = P({ pos: onRwy(1 - 900 / RWY_LEN), alt: ELEV + 30, trk: 53, gs: 48 });
+            expect(p.kind).toBe('direct');
+            expect(p.turnBack).toBe(true);
+        });
+        it('vs1_kt comes from the aircraft settings', () => {
+            const s = S(); s.aircraft.vs1_kt = 60;
+            expect(P({ pos: onRwy(1 - 900 / RWY_LEN), alt: ELEV, trk: 53, gs: 55 }, s).kind).toBe('over');
+        });
+        it('crossing the runway (not lined up) at 40 kt, low: NOT over - only rolling ALONG it counts', () => {
+            expect(P({ pos: onRwy(0.5), alt: ELEV + 20, trk: 143, gs: 40 }).kind).toBe('direct');
+        });
+        it('no ground speed known: not rolling', () => {
+            expect(P({ pos: onRwy(1 - 900 / RWY_LEN), alt: ELEV, trk: 53, gs: NaN }).kind).toBe('direct');
+        });
+    });
+
+    describe('2. a valid short final is not overridden by crossing another runway\'s pavement', () => {
+        const thrA = klkr().ends[0].thr;                       // end A (landing 233) threshold = the NE end
+        const onFinalA = (nm) => { const back = fromPolar(53, nm); return { x: thrA.x + back.x, y: thrA.y + back.y }; };
+        // A 3,000 ft runway 143/323 whose middle is on runway A's final, 0.5 nm out.
+        const X = onFinalA(0.5), xHalf = 1500 / FT_PER_NM;
+        const xa = { x: X.x + fromPolar(323, xHalf).x, y: X.y + fromPolar(323, xHalf).y };   // NW end
+        const xb = { x: X.x + fromPolar(143, xHalf).x, y: X.y + fromPolar(143, xHalf).y };   // SE end
+        const crossing = () => {
+            const base = klkr();
+            const mkX = (id, hdg, thr) => ({ id, thr, hdgTrue: hdg, rwyLenFt: 3000, mid: X, rwy: { a: xa, b: xb }, runwayId: '14/32' });
+            return { ...base, ends: [...base.ends, mkX('14', 143, xa), mkX('32', 323, xb)] };
+        };
+        const at = { pos: X, alt: 900, trk: 233, gs: 65, wind: null, runwayWind: { kind: 'none' } };
+
+        it('over the crossing runway\'s pavement on short final to 24 (A): kind final to A, not a turn to the other runway', () => {
+            const p = P({ ...at, airport: crossing() });
+            expect(p.kind).toBe('final');
+            expect(p.endId).toBe('A');
+            expect(p.turnBack).toBeFalsy();
+        });
+        it('same numbers as the same final without the crossing runway', () => {
+            const withX = P({ ...at, airport: crossing() }), without = P({ ...at, airport: klkr() });
+            expect(withX.spare).toBeCloseTo(without.spare, 9);
+            expect(withX.legNm).toBeCloseTo(without.legNm, 9);
+        });
+        it('crossing that runway NOT on a final (track 143 along nothing): still the turn back to its mid-point', () => {
+            const p = P({ ...at, trk: 200, airport: crossing() });   // 33 deg off 233: not a final, not lined up with 14/32
+            expect(p.kind).toBe('direct');
+            expect(p.turnBack).toBe(true);
+        });
+    });
+});

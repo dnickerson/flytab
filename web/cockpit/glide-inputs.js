@@ -84,6 +84,7 @@ const GlideInputs = (() => {
             glide_ias_kt: [30, 200],        // no safe side: a slower glide turns in less height (review R29)
             glide_sink_fpm: [100, 3000, 'higher'],
             glide_density_pct_per_kft: [0, 5],
+            vs1_kt: [20, 120, 'lower'],     // a lower stall speed calls fewer "rolling on the runway" OVERs (Decision A)
         },
         pilot: {
             turnBankDeg: [10, 60],          // 90 or more would make 1 / cos(bank)^1.5 blow up

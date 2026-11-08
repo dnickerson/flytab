@@ -111,7 +111,8 @@ it is −159 with a 179° turn — the impossible turn; crossing the runway at r
   `needAheadFt` = straight-glide distance from the current height above the end ahead
   (ground speed from the triangle along `dir`, sink at altitude) + **ROLLOUT_FT = 1,000**.
 - `kind 'over'` (alt − elev ≤ marginFt): when `gs < showAboveGsKt` (on the runway at taxi
-  speed), or lined up with `aheadFt ≥ needAheadFt`.
+  speed), lined up with `gs < vs1_kt` (rolling along it below stall speed; Decision A below),
+  or lined up with `aheadFt ≥ needAheadFt`.
 - High pass (alt − elev > marginFt): zero leg / no turn only when lined up with
   `aheadFt ≥ needAheadFt`; `spare = alt − elev − marginFt`.
 - Otherwise (not lined up, or not enough runway ahead): `kind 'direct'` to the **runway
@@ -176,3 +177,20 @@ ground. The ground wind should only go up 1000 feet at most."*
 - 20:04:51 (33 ft above the field, lined up, ~230 ft before the pavement): GLIDE OK, on final.
 - Rollout 20:04:55 onward: OVER RWY 06/24, never "~860 ft low".
 - Same flight, no METAR and no winds aloft: the assumed 10 kt applies (amber wind line).
+
+### Decision A (Dana, 2026-11-08): no false CANNOT REACH on the runway or on short final
+Pre-merge review of PR #209 found two places that read red where the aircraft could land:
+1. **Rollout / takeoff roll.** Low over the runway, lined up, `gs ≥ showAboveGsKt` (25 kt) with
+   less than `needAheadFt` left (e.g. landed long, 40 kt, 900 ft left) was a turn back to the
+   end behind: CANNOT REACH and a 180° cue on the pavement. Now lined up with
+   `gs < vs1_kt` (aircraft performance `vs1_kt`, default 48; validated [20, 120], errs low) is
+   `over`: below stall speed it cannot be flying. Crossing (not lined up) is unchanged.
+   Known limit: ground speed, not airspeed — just after liftoff into a headwind above
+   ~17 kt (65 KIAS) GS can be under 48 while airborne; then a low, lined-up aircraft with
+   too little runway ahead reads OVER RWY instead of the turn back.
+2. **Crossing runways.** On a valid short final (FINAL_* gates) to one runway, being over
+   another runway's footprint set `turnBackTo` and skipped `final` (`if (fin && !turnBackTo)`),
+   e.g. +33 → −342 for KLKR 24 with a 14/32 crossing 0.5 nm out. Now `final` wins over a turn
+   back (`if (fin)`); the turn back stays for "over a runway, nothing landable ahead". A short
+   final can never be to the runway the aircraft is over and lined up with (its threshold is
+   behind), so this only affects crossing runways.

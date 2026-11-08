@@ -1037,3 +1037,22 @@ describe('GlideInputs.glideWindFor: two layers split at surfaceWindMaxAglFt (Dan
         expect(GlideInputs.glideWindFor(g, undefined, settings(), 1500).label).toBe(g.label);
     });
 });
+
+describe('vs1_kt (stall speed, Decision A 2026-11-08): from the aircraft performance block, errs low', () => {
+    const v = (x) => GlideInputs.validate({ aircraft: { vs1_kt: x }, pilot: {} }).aircraft.vs1_kt;
+    it('a sane value is kept; missing or junk takes the default 48', () => {
+        expect(v(48)).toBe(48);
+        expect(v(55)).toBe(55);
+        expect(v(undefined)).toBe(48);
+        expect(v('x')).toBe(48);
+    });
+    it('below the range: the low edge (fewer OVER RWY calls); above it: the default', () => {
+        expect(v(5)).toBe(20);
+        expect(v(500)).toBe(48);
+    });
+    it('settings() reads performance.vs1_kt from CockpitConfig', () => {
+        const prev = globalThis.CockpitConfig;
+        globalThis.CockpitConfig = { aircraft: (k) => (k === 'performance.vs1_kt' ? 52 : undefined), get: () => ({}) };
+        try { expect(GlideInputs.settings().aircraft.vs1_kt).toBe(52); } finally { globalThis.CockpitConfig = prev; }
+    });
+});
