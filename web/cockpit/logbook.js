@@ -844,6 +844,28 @@ class Logbook {
 
     // ========== Data Access ==========
 
+    /**
+     * Newest first: by date (created_at when there is none), then by out time.
+     * Recorded entries store "18:09Z", ForeFlight imports "21:26"; an entry
+     * with no out time goes last in its day, newest created first. Sorting on
+     * the date alone left a day's entries in IndexedDB order (10/27/2026: the
+     * two legs between the KTBR run-ups), and _getLastHobbs read whichever of
+     * a day's entries happened to come first.
+     */
+    static compareNewestFirst(a, b) {
+        // An entry with no date goes by created_at's day (and its time when it has no out time), not by
+        // the whole timestamp, which would sort it above every dated entry that day.
+        const day = (e) => e.date || String(e.created_at || '').slice(0, 10);
+        const time = (e) => {
+            // The Out field is free text: "18:09Z", "21:26", or typed "1809".
+            const m = String(e.time_out ?? '').match(/^(\d{1,2}):?(\d{2})/)
+                || (!e.date && String(e.created_at || '').match(/T(\d{2}):(\d{2})/));
+            return m ? m[1].padStart(2, '0') + ':' + m[2] : '';
+        };
+        const desc = (x, y) => (x < y ? 1 : x > y ? -1 : 0);
+        return desc(day(a), day(b)) || desc(time(a), time(b)) || desc(a.created_at || '', b.created_at || '');
+    }
+
     async getEntries({ limit = 0, includeTombstones = false } = {}) {
         try {
             const db = await this._openIdb();
@@ -853,7 +875,7 @@ class Logbook {
                 req.onsuccess = () => {
                     let entries = (req.result || [])
                         .filter(e => includeTombstones || !e.deleted_at)
-                        .sort((a, b) => (b.date || b.created_at || '').localeCompare(a.date || a.created_at || ''));
+                        .sort(Logbook.compareNewestFirst);
                     if (limit > 0) entries = entries.slice(0, limit);
                     db.close();
                     resolve(entries);

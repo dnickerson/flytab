@@ -890,7 +890,7 @@ The **Fuel** station on the W&B page (MORE → Weight & Balance) pre-fills from 
 - Conditions (VFR/IFR)
 - Pilot notes
 
-Entries are created automatically at the end of each flight when recording is active. The **REC** badge in the status bar shows recording state. You can edit any entry after the fact.
+Entries are created automatically at the end of each flight when recording is active. The **REC** badge in the status bar shows recording state. You can edit any entry after the fact. The list shows the 50 most recent entries, newest first: by date, then by out time within a day (entries with no out time go last in their day).
 
 Recording stops automatically 60 seconds after engine shutdown (RPM ≤ 100). If the tablet screen turns off or the app is backgrounded once the engine has been off for 30 seconds, the recording finalizes immediately so no data is lost. (Not sooner: the engine data can read 0 RPM for a few seconds with the engine running, e.g. at the mag check, and that must not split the flight.) The engine readings count only while they are moving: if the engine monitor (Pi) is up but its EMS serial line has stopped delivering, its last reading is repeated, so FlyTab goes by GPS instead — recording starts at more than 30 kt for 10 seconds and stops after 60 seconds below 10 kt, as without an engine monitor.
 
