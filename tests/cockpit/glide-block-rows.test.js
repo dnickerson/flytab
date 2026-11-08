@@ -5,10 +5,12 @@
  * runway through the reference point, landing true 233 / 053, field elevation 486, default settings,
  * one wind for glide and runway) and checks every displayed row equals the model output formatted
  * per spec:
- *   verdict     ✓ GLIDE OK · N ft high | ⚠ FINAL POINT OUT OF REACH · N ft high | ✗ CANNOT REACH KLKR · N ft low |
+ *   verdict     ✓ GLIDE OK · N ft high (direct / final, spare >= 0) | ✗ CANNOT REACH KLKR · N ft low |
+ *               ✓ OVER RWY <runwayId> (no rows) |
  *               RUNWAY POSITION NOT KNOWN / NO SUITABLE RUNWAY · steer to the airport · N ft high (state on a
  *               sub line under a CANNOT REACH title when low); N = floor(spare) when >= 0, ceil(-spare) when < 0
- *   TO          RWY <endId> | RWY <runwayId> + "nearest part" | the ICAO
+ *               (spec 2026-11-06: no "FINAL POINT OUT OF REACH" any more)
+ *   TO          RWY <endId> + "on final" | RWY <runwayId> + "nearest part" | the ICAO
  *   HEADING     hdg3(hdgTrue - MagVar.declination(ac)) + "°", turn cue from turnNow / onCourseDeg
  *   DISTANCE    legNm.toFixed(1) nm
  *   AIRSPEED    validated glide_ias_kt KIAS
@@ -47,9 +49,9 @@ const CASES = {
     E: { pos: fromPolar(0, 15), alt: 3000, trk: 180, gs: 140, vs: 0, wind: { from: 360, kt: 20 } },
     F: { pos: fromPolar(45, 6), alt: 4000, trk: 225, gs: 140, vs: 0, wind: { from: 60, kt: 15 } },
 };
-// The golden table (glide-model.test.js): [case, preferDirect, kind, spare, legNm, target]
+// The golden table (glide-model.test.js): [case, preferDirect (ignored), kind, spare, legNm, target]
 const GOLDEN = {
-    'B-final': ['B', false, 'final', 200, 6.41, 817],
+    'B-direct': ['B', false, 'direct', 1248, 5.71, 1049],
     'A-planB': ['A', false, 'direct', 529, 4.69, 887],
     'F-planB': ['F', true, 'direct', 356, 5.51, 847],
     'C-cannot': ['C', false, 'direct', -389, 2.51, 585],
@@ -143,33 +145,70 @@ describe('golden KLKR cases -> displayed rows', () => {
         }
     });
 
-    it('GLIDE OK (golden B, final point to RWY 24): every row', () => {
-        const p = planFor('B', false);
-        const v = show(p, 'B');
-        expect(p.kind).toBe('final');
-        expect(p.endId).toBe('24');
-        expect(v.tone).toBe('ok');
-        expect(v.verdict).toBe(`✓ GLIDE OK · ${hiLo(p.spare)}`);
-        expect(v.verdict).toMatch(/^✓ GLIDE OK · (199|200) ft high$/);          // golden spare 200 ±1, floored
-        expect(v.sub).toBeNull();
-        expect(v.rows.TO).toEqual(['RWY 24']);
-        expect(v.rows['GLIDE PATH'][0]).toMatch(/^\+(199|200) ft$/);
-        expect(v.rows.DISTANCE).toEqual(['6.4 nm']);                              // golden 6.41
-        expectCommonRows(v, p, 'B');
-    });
-
-    it.each([['A-planB'], ['F-planB']])('FINAL POINT OUT OF REACH (golden %s, plan B to the runway): every row', (key) => {
-        const [c, pd, , spare] = GOLDEN[key];
+    it.each([['B-direct'], ['A-planB'], ['F-planB']])('GLIDE OK (golden %s, the nearest part of the runway): every row, green', (key) => {
+        const [c, pd, , spare, leg] = GOLDEN[key];
         const p = planFor(c, pd);
         const v = show(p, c);
         expect(p.kind).toBe('direct');
         expect(p.spare).toBeGreaterThanOrEqual(0);
-        expect(v.tone).toBe('caution');
-        expect(v.verdict).toBe(`⚠ FINAL POINT OUT OF REACH · ${hiLo(p.spare)}`);
+        expect(v.tone).toBe('ok');
+        expect(v.verdict).toBe(`✓ GLIDE OK · ${hiLo(p.spare)}`);
         expect(Math.abs(N(p.spare) - spare)).toBeLessThanOrEqual(1);
         expect(v.sub).toBeNull();
         expect(v.rows.TO).toEqual(['RWY 06/24', 'nearest part']);
+        expect(v.rows.DISTANCE).toEqual([`${leg.toFixed(1)} nm`]);
         expectCommonRows(v, p, c);
+    });
+
+    it('on final (kind final): GLIDE OK / CANNOT REACH, TO "RWY 24" + "on final", every row', () => {
+        // 0.5 nm before the 24 end on its extended centreline, tracking 233
+        const half = RWY_LEN / 2 / FT_PER_NM, back = fromPolar(53, half + 0.5);
+        CASES.FIN = { pos: back, alt: 900, trk: 233, gs: 70, vs: -400, wind: null };
+        try {
+            const p = planFor('FIN', false);
+            expect(p.kind).toBe('final');
+            const v = show(p, 'FIN');
+            expect(v.tone).toBe('ok');
+            expect(v.verdict).toBe(`✓ GLIDE OK · ${hiLo(p.spare)}`);
+            expect(v.rows.TO).toEqual(['RWY 24', 'on final']);
+            expectCommonRows(v, p, 'FIN');
+            CASES.FIN.alt = ELEV + 20;
+            const lo = planFor('FIN', false);
+            expect(lo.kind).toBe('final');
+            const vl = show(lo, 'FIN');
+            expect(vl.tone).toBe('danger');
+            expect(vl.verdict).toBe(`✗ CANNOT REACH KLKR · ${hiLo(lo.spare)}`);
+            expect(vl.rows.TO).toEqual(['RWY 24', 'on final']);
+        } finally {
+            delete CASES.FIN;
+        }
+    });
+
+    it('over the runway (kind over): "✓ OVER RWY 06/24", green, no rows, no height', () => {
+        CASES.OVR = { pos: { x: 0, y: 0 }, alt: ELEV + 30, trk: 233, gs: 40, vs: 0, wind: null };
+        try {
+            const p = planFor('OVR', false);
+            expect(p.kind).toBe('over');
+            const v = show(p, 'OVR');
+            expect(v.tone).toBe('ok');
+            expect(v.verdict).toBe('✓ OVER RWY 06/24');
+            expect(v.sub).toBeNull();
+            expect(v.rows).toEqual({});
+            expect(host.querySelector('.glide-grid')).toBeNull();
+            // no runway id: plain "OVER RUNWAY"
+            expect(show({ ...p, runwayId: null }, 'OVR').verdict).toBe('✓ OVER RUNWAY');
+        } finally {
+            delete CASES.OVR;
+        }
+    });
+
+    it('the glide wind text is amber only when the headwind is assumed', () => {
+        const p = planFor('A', false);
+        show(p, 'A', { gw: { wind: { headKt: 4 }, label: 'METAR KLKR VRB/04 (8 min) · surface', assumed: false } });
+        expect(host.querySelector('.glide-wind .glide-amber')).toBeNull();
+        expect(host.querySelector('.glide-wind').textContent).toBe('Glide: METAR KLKR VRB/04 (8 min) · surface');
+        show(p, 'A', { gw: { wind: null, label: 'NO CURRENT WINDS ALOFT · 10 kt headwind assumed', assumed: true } });
+        expect(host.querySelector('.glide-wind .glide-amber').textContent).toBe('Glide: NO CURRENT WINDS ALOFT · 10 kt headwind assumed');
     });
 
     it.each([['C-cannot'], ['D-cannot'], ['E-cannot']])('CANNOT REACH (golden %s): every row, GLIDE PATH negative and red', (key) => {
