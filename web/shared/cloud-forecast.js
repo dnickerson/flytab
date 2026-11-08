@@ -378,7 +378,12 @@ class CloudForecastStore {
         let lastErr = null;
         for (const m of CLOUD_MODELS) {
             const resp = await fetch(cloudBuildUrl(points, m.id), { signal: AbortSignal.timeout(30000) });
-            if (!resp.ok) { lastErr = new Error(`Cloud fetch failed (${m.label}): ${resp.status} ${resp.statusText}`); continue; }
+            if (!resp.ok) {
+                lastErr = new Error(`Cloud fetch failed (${m.label}): ${resp.status} ${resp.statusText}`);
+                // Over Open-Meteo's per-IP allowance (shared with the model-winds fetch): the next model is refused too.
+                if (resp.status === 429) throw lastErr;
+                continue;
+            }
             const json = await resp.json();
             const series = Array.isArray(json) ? json : [json];
             if (!series[0]?.hourly?.time?.length) { lastErr = new Error(`Cloud fetch returned no hourly data (${m.label})`); continue; }

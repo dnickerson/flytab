@@ -488,3 +488,14 @@ describe('cloud model: RRFS (ncep_rrfs_conus) first, GFS (gfs_seamless) when RRF
         expect(cloudBuildResult(old, [eta, eta], Date.parse(old.fetchedAt)).model).toBeNull();
     });
 });
+
+describe('cloud fetch: a 429 stops (no GFS request on top) and says RRFS was refused', () => {
+    afterEach(() => { delete globalThis.fetch; });
+    it('RRFS 429: one request, error names RRFS 429', async () => {
+        const calls = [];
+        globalThis.fetch = async (url) => { calls.push(new URL(url).searchParams.get('models')); return { ok: false, status: 429, statusText: 'Too Many Requests', json: async () => ({}) }; };
+        const s = new CloudForecastStore(); s._save = async () => {};
+        await expect(s.fetchAndStore(FIX_POINTS)).rejects.toThrow(/RRFS.*429/);
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+    });
+});

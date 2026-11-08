@@ -17,7 +17,7 @@
  * route-table.js is a classic (non-ESM) script, loaded with the same
  * `new Function(src + 'return Class;')()` pattern as the other route-table tests.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -174,5 +174,33 @@ describe('_cloudSamplePoints — coordinate completeness guard', () => {
         const pts = makeTable(wps)._cloudSamplePoints();
         expect(pts.length).toBe(8);          // ceil(200/25)
         expect(pts.every(p => p.lat != null && p.lon != null)).toBe(true);
+    });
+});
+
+describe('_refreshCloudForecast: same route refetched once the stored forecast is over an hour old', () => {
+    const route = () => straightRoute([30, 30]);
+    let fetches;
+    beforeEach(() => {
+        fetches = 0;
+        globalThis.app = { networkMode: { mode: 'home' } };
+        globalThis.cloudRouteHash = (pts) => pts.map((p) => `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`).join('|');
+        globalThis.CloudForecastStore = class { async fetchAndStore() { fetches++; } };
+        vi.useFakeTimers({ now: T0, toFake: ['Date'] });
+    });
+    afterEach(() => { vi.useRealTimers(); delete globalThis.app; delete globalThis.CloudForecastStore; delete globalThis.cloudRouteHash; });
+
+    it('not again within the hour; again after it (it used to wait for a route change or a restart)', async () => {
+        const rt = makeTable(route());
+        await rt._refreshCloudForecast();
+        await rt._refreshCloudForecast();
+        expect(fetches).toBe(1);
+        vi.setSystemTime(T0 + 61 * 60_000);
+        await rt._refreshCloudForecast();
+        expect(fetches).toBe(2);
+    });
+    it('away from home/internet: never', async () => {
+        globalThis.app.networkMode.mode = 'stratux';
+        await makeTable(route())._refreshCloudForecast();
+        expect(fetches).toBe(0);
     });
 });

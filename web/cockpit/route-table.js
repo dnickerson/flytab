@@ -2843,12 +2843,15 @@ class RouteTable {
         if (points.length < 2) return;
 
         const hash = cloudRouteHash(points);
-        if (hash === this._cloudFetchedHash) return;   // already have this route
+        // Already have this route, fetched within the hour. It used to be once per route per session, so an
+        // unchanged route's forecast was never refreshed while FlyTab ran (review of #213, 2026-11-08).
+        if (hash === this._cloudFetchedHash && Date.now() - (this._cloudFetchedAt || 0) < 3600000) return;
 
         this._cloudStore = this._cloudStore || new CloudForecastStore();
         try {
             await this._cloudStore.fetchAndStore(points);
             this._cloudFetchedHash = hash;
+            this._cloudFetchedAt = Date.now();
             window.DiagLog?.log('cloud', `forecast cached — ${points.length} pts`);
         } catch (e) {
             window.DiagLog?.log('cloud', `forecast fetch failed: ${e?.message}`);
