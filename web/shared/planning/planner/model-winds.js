@@ -33,7 +33,10 @@ const AGL_MIN_FT = 1500;                 // FB convention: no forecast within 1,
 const WINDOW_BEFORE_H = 1;               // a fetch covers the departure hour -1 h ...
 const WINDOW_AFTER_H = 12;               // ... to +12 h (the flight, flown offline)
 export const REUSE_MS = 60 * 60_000;     // a fetch younger than this is used without fetching again
-const TIMEOUT_MS = 15_000;
+const TIMEOUT_MS = 8_000;                // until the response starts: in the air (no internet) it can only time out
+const BODY_TIMEOUT_MS = 30_000;          // then for the ~1.1 MB body (2.6-3.5 s measured on home internet, 2026-11-08)
+const CACHE_VERSION = 2;                 // rows are positional over ALTS_FT: a stored fetch of another shape is ignored
+const MAX_WINDOWS = 2;                   // e.g. today's flight and tomorrow's: looking at one never evicts the other
 
 /** Open-Meteo's "2026-11-08T12:00" (no zone; asked for GMT) -> ms UTC. */
 export function omTimeMs(s) {
@@ -153,22 +156,46 @@ export function windsAt(fetched, atMs) {
     };
 }
 
-function readCache() {
-    try {
-        const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
-        if (!c || !Array.isArray(c.hours) || !Array.isArray(c.data) || !Array.isArray(c.ids)) return null;
-        return c;
-    } catch (_) { return null; }
+// The stored fetches, parsed once per page load (~170 KB each).
+let memo = null;
+
+/** { v, alts, windows: [fetch] } from localStorage, or an empty store (unknown shape: ignored). */
+function readStore() {
+    if (memo) return memo;
+    let st = null;
+    try { st = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch (_) { st = null; }
+    const ok = st && st.v === CACHE_VERSION && Array.isArray(st.alts) && st.alts.join() === ALTS_FT.join()
+        && Array.isArray(st.windows)
+        && st.windows.every((w) => w && Array.isArray(w.hours) && Array.isArray(w.data) && Array.isArray(w.ids));
+    memo = ok ? st : { v: CACHE_VERSION, alts: ALTS_FT, windows: [] };
+    return memo;
 }
 
-function writeCache(f) {
+/** Add a fetch: the newest MAX_WINDOWS kept, a window whose hours are all past dropped. */
+function storeFetch(f, nowMs) {
+    const st = readStore();
+    const live = st.windows.filter((w) => w !== f && (lastHour(w)?.getTime() ?? 0) >= nowMs - 3600_000);
+    memo = { v: CACHE_VERSION, alts: ALTS_FT, windows: [f, ...live].slice(0, MAX_WINDOWS) };
     try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(f));
+        localStorage.setItem(CACHE_KEY, JSON.stringify(memo));
     } catch (err) {
-        // Not kept: these winds are used now, but there will be none in the air.
+        // Not kept: these winds are used now (memo), but after a restart there will be none in the air.
         if (typeof DiagLog !== 'undefined') DiagLog.log('error', 'Model winds not stored (no winds offline)', err?.message);
     }
 }
+
+/** The newest stored window that has `atMs` (optionally only one fetched within REUSE_MS). */
+function storedAt(atMs, freshOnly) {
+    for (const w of readStore().windows) {
+        if (freshOnly && !(Date.now() - w.fetchedAt < REUSE_MS)) continue;
+        const r = windsAt(w, atMs);
+        if (r) return r;
+    }
+    return null;
+}
+
+/** Test hook: forget the parsed store (as a page reload does). */
+export function _resetMemo() { memo = null; }
 
 /** The last hour with data in a fetch (for "forecast to ..."). */
 function lastHour(f) {
@@ -178,7 +205,7 @@ function lastHour(f) {
 
 /**
  * Model winds for `atMs`:
- *   1. the cached fetch, if younger than REUSE_MS and it has that hour;
+ *   1. a stored fetch younger than REUSE_MS that has that hour (up to MAX_WINDOWS kept);
  *   2. a new fetch: RRFS, else GFS for an hour RRFS does not have;
  *   3. the cached fetch at any age, if it has that hour (in the air, offline): marked stale.
  * @param {Record<string,[number,number]>} stations  FD station id -> [lat, lon]
@@ -187,17 +214,23 @@ function lastHour(f) {
  *   | {winds: null, coverTo: Date|null}>}
  */
 export async function fetchModelWinds(stations, atMs) {
-    const cached = readCache();
-    if (cached && Date.now() - cached.fetchedAt < REUSE_MS) {
-        const w = windsAt(cached, atMs);
-        if (w) return w;
-    }
+    const fresh = storedAt(atMs, true);
+    if (fresh) return fresh;
     let coverTo = null;
     for (const model of MODELS) {
         let fetched = null;
         try {
             const { url, ids } = buildUrl(stations, model, atMs);
-            const resp = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+            // One controller: aborted after TIMEOUT_MS if no response has started, else after BODY_TIMEOUT_MS
+            // (a single 8 s limit also cut off slow body downloads, and the fetch was silently lost).
+            const ctl = new AbortController();
+            let timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+            let resp;
+            try {
+                resp = await fetch(url, { signal: ctl.signal });
+            } finally {
+                clearTimeout(timer);
+            }
             if (resp.status === 429) {
                 // Over Open-Meteo's allowance (per IP: shared with anything else on the
                 // home network). Another model would cost as much and be refused too.
@@ -205,17 +238,29 @@ export async function fetchModelWinds(stations, atMs) {
                 break;
             }
             if (!resp.ok) continue;
-            const parsed = parseResponse(await resp.json(), ids);
+            timer = setTimeout(() => ctl.abort(), BODY_TIMEOUT_MS);
+            let body;
+            try {
+                body = await resp.json();
+            } finally {
+                clearTimeout(timer);
+            }
+            const parsed = parseResponse(body, ids);
             if (parsed) fetched = { ...parsed, ids, model: model.label, fetchedAt: Date.now() };
-        } catch (_) { break; }                              // offline / timed out: no point trying the next model
+        } catch (err) {
+            // Offline / timed out: no point trying the next model.
+            if (typeof DiagLog !== 'undefined') DiagLog.log('error', 'Model winds fetch failed', err?.name || String(err));
+            break;
+        }
         if (!fetched) continue;
         const w = windsAt(fetched, atMs);
-        if (w) { writeCache(fetched); return w; }
+        if (w) { storeFetch(fetched, Date.now()); return w; }
         const end = lastHour(fetched);
         if (end && (!coverTo || end > coverTo)) coverTo = end;
     }
     // Older than REUSE_MS but has the hour: the caller may prefer fresh FIS-B.
-    const stale = cached ? windsAt(cached, atMs) : null;
+    const stale = storedAt(atMs, false);
     if (stale) return { ...stale, stale: true };
-    return { winds: null, coverTo: coverTo || lastHour(cached) };
+    const ends = readStore().windows.map(lastHour).filter(Boolean);
+    return { winds: null, coverTo: coverTo || (ends.length ? new Date(Math.max(...ends)) : null) };
 }

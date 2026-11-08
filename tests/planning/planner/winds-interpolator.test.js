@@ -96,6 +96,8 @@ describe('pickFdPeriod: the period whose FOR USE window holds the departure', ()
     });
 });
 
+import { _resetMemo } from '../../../web/shared/planning/planner/model-winds.js';
+
 describe('fetchWindsDetailed: model winds (RRFS/GFS via Open-Meteo); FD bulletins ended 2026-11-03', () => {
     // A real Open-Meteo RRFS answer for CLT, CAE, DEN, 2026-11-08 12Z-15Z.
     const RRFS = JSON.parse(readFileSync('tests/fixtures/winds/openmeteo-rrfs-clt-cae-den-20261108.json', 'utf8'));
@@ -104,6 +106,7 @@ describe('fetchWindsDetailed: model winds (RRFS/GFS via Open-Meteo); FD bulletin
     let calls;
     beforeEach(() => {
         for (const k of Object.keys(store)) delete store[k];
+        _resetMemo();
         calls = [];
         globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
         globalThis.WeatherClient = { FD_STATIONS: { CLT: [35.21, -80.94], CAE: [33.94, -81.12], DEN: [39.86, -104.67] } };
@@ -165,10 +168,59 @@ describe('fetchWindsDetailed: model winds (RRFS/GFS via Open-Meteo); FD bulletin
         await fetchWindsDetailed(new Date('2026-11-08T12:10:00Z'));
         vi.setSystemTime(new Date('2026-11-08T13:30:00Z'));
         answer({});
-        globalThis.window = { app: { fisbClient: { winds: new Map([['CLT:6000', { dir: 270, spd: 22 }]]) } } };
+        globalThis.window = { app: { fisbClient: { winds: new Map([['CLT:6000', { dir: 270, spd: 22, received_at: Date.now() - 10 * 60_000 }]]) } } };
         const r = await fetchWindsDetailed(new Date('2026-11-08T13:30:00Z'));
         expect(r.source).toBe('fisb');
         expect(r.winds.CLT[6000].spd).toBe(22);
+    });
+
+    it('FIS-B received over an hour ago does not beat the stored model hour; it is still used when there is nothing else', async () => {
+        answer({ ncep_rrfs_conus: RRFS });
+        await fetchWindsDetailed(new Date('2026-11-08T12:10:00Z'));
+        vi.setSystemTime(new Date('2026-11-08T13:30:00Z'));
+        answer({});
+        const old = { dir: 270, spd: 22, received_at: Date.now() - 2 * 3600_000 };
+        globalThis.window = { app: { fisbClient: { winds: new Map([['CLT:6000', old]]) } } };
+        expect((await fetchWindsDetailed(new Date('2026-11-08T13:30:00Z'))).source).toBe('model');
+        for (const k of Object.keys(store)) delete store[k];
+        _resetMemo();                                                   // nothing stored any more
+        expect((await fetchWindsDetailed(new Date('2026-11-08T13:30:00Z'))).source).toBe('fisb');
+    });
+
+    // The same answer moved a day later: "tomorrow's" fetch.
+    const dayLater = (json) => json.map((loc) => ({ ...loc, hourly: { ...loc.hourly,
+        time: loc.hourly.time.map((t) => new Date(Date.parse(t + ':00Z') + 86400_000).toISOString().slice(0, 16)) } }));
+
+    it('looking at tomorrow\'s departure does not evict today\'s stored winds (offline in the air later)', async () => {
+        answer({ ncep_rrfs_conus: RRFS });
+        await fetchWindsDetailed(new Date('2026-11-08T13:00:00Z'));              // today
+        answer({ ncep_rrfs_conus: dayLater(RRFS) });
+        const tmrw = await fetchWindsDetailed(new Date('2026-11-09T13:00:00Z'));  // tomorrow
+        expect(tmrw.validAt.toISOString()).toBe('2026-11-09T13:00:00.000Z');
+        vi.setSystemTime(new Date('2026-11-08T14:40:00Z'));                       // airborne, no internet
+        answer({});
+        _resetMemo();                                                             // even after a restart
+        const r = await fetchWindsDetailed(new Date('2026-11-08T14:40:00Z'));
+        expect(r.source).toBe('model');
+        expect(r.validAt.toISOString()).toBe('2026-11-08T15:00:00.000Z');
+    });
+
+    it('toggling DEPART between today and tomorrow within the hour: no new requests (Open-Meteo allowance)', async () => {
+        answer({ ncep_rrfs_conus: RRFS });
+        await fetchWindsDetailed(new Date('2026-11-08T13:00:00Z'));
+        answer({ ncep_rrfs_conus: dayLater(RRFS) });
+        await fetchWindsDetailed(new Date('2026-11-09T13:00:00Z'));
+        calls = [];
+        await fetchWindsDetailed(new Date('2026-11-08T13:00:00Z'));
+        await fetchWindsDetailed(new Date('2026-11-09T13:00:00Z'));
+        expect(calls).toHaveLength(0);
+    });
+
+    it('a stored cache of another format (no version / other altitudes) is ignored, not misread', async () => {
+        store.flytab_model_winds = JSON.stringify({ hours: [Date.parse('2026-11-08T13:00Z')], data: [[[[90, 99, 0]]]], ids: ['CLT'], model: 'RRFS', fetchedAt: Date.now() });
+        _resetMemo();
+        answer({});
+        expect((await fetchWindsDetailed(new Date('2026-11-08T13:00:00Z'))).winds).toBeNull();
     });
 
     it('offline, nothing stored: no winds, "unavailable"', async () => {

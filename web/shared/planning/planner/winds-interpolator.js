@@ -117,7 +117,11 @@ export function pickFdPeriod(periods, departure) {
     return null;
 }
 
-function fisbWinds() {
+// FIS-B winds beat stored model winds only while they are still arriving (review of #212: the Map keeps
+// reports up to 6 h, and CONUS FIS-B winds may have stopped with the FD bulletins on 2026-11-03).
+const FISB_FRESH_MS = 60 * 60_000;
+
+function fisbWinds(maxAgeMs = Infinity) {
     try {
         const fisb = (typeof window !== 'undefined') ? window.app?.fisbClient?.winds : null;
         if (!fisb || fisb.size === 0) return null;
@@ -125,6 +129,7 @@ function fisbWinds() {
         const canonical = {};
         for (const [key, wind] of fisb) {
             if (wind.dir == null || wind.spd == null) continue;
+            if (maxAgeMs !== Infinity && !(Number.isFinite(wind.received_at) && Date.now() - wind.received_at <= maxAgeMs)) continue;
             const sep = key.lastIndexOf(':');
             if (sep < 0) continue;
             const station = key.slice(0, sep);
@@ -144,8 +149,9 @@ function fisbWinds() {
  * AWC's windtemp API answers 400, so the FD fetch is gone (2026-11-08):
  *   1. model winds (RRFS, GFS past RRFS's range) from Open-Meteo at the FD
  *      stations: a fetch younger than an hour, or a new one (model-winds.js)
- *   2. Stratux FIS-B, for a departure within FISB_MAX_AHEAD_MS (the current forecast)
- *   3. older cached model winds that have the departure hour (in the air, offline)
+ *   2. Stratux FIS-B received within FISB_FRESH_MS, for a departure within FISB_MAX_AHEAD_MS
+ *   3. older stored model winds that have the departure hour (in the air, offline)
+ *   4. any FIS-B winds still held, for a departure within FISB_MAX_AHEAD_MS
  * @param {Date} [departureTime]
  * @returns {Promise<{winds: object|null, source: 'model'|'fisb'|null, model?: string,
  *   validAt?: Date, useFrom?: Date, useTo?: Date, fetchedAt?: Date, stale?: boolean,
@@ -161,13 +167,19 @@ export async function fetchWindsDetailed(departureTime) {
 
     // 1. Model winds fetched within the hour.
     if (m.winds && !m.stale) return m;
-    // 2. Stratux FIS-B for a departure soon.
-    if (at - now <= FISB_MAX_AHEAD_MS) {
-        const w = fisbWinds();
+    const soon = at - now <= FISB_MAX_AHEAD_MS;
+    // 2. Stratux FIS-B still arriving (received within FISB_FRESH_MS), for a departure soon.
+    if (soon) {
+        const w = fisbWinds(FISB_FRESH_MS);
         if (w) return { winds: w, source: 'fisb' };
     }
     // 3. Older model winds for that hour.
     if (m.winds) return m;
+    // 4. Any FIS-B winds still held (fisb-client drops them after 6 h), for a departure soon.
+    if (soon) {
+        const w = fisbWinds();
+        if (w) return { winds: w, source: 'fisb' };
+    }
 
     // None: "beyond" only when the departure is past a forecast that is still current.
     const coverTo = m.coverTo || null;
