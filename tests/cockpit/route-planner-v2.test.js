@@ -1434,3 +1434,33 @@ describe('Fuel-stop picker: no HTML from identifiers or names (review, 2026-10-1
         await picked;
     });
 });
+
+describe('WIND label: which forecast the winds come from (FD bulletins ended 2026-11-03)', () => {
+    const label = (w) => RoutePlannerV2.prototype._windsLabel.call({ _windsInfo: w });
+    const at = new Date('2026-11-08T15:00:00Z');
+    it('model winds name the model and the hour (UTC)', () => {
+        expect(label({ winds: { CLT: {} }, source: 'model', model: 'RRFS', validAt: at })).toBe('RRFS 08/15Z');
+        expect(label({ winds: { CLT: {} }, source: 'model', model: 'GFS', validAt: at })).toBe('GFS 08/15Z');
+    });
+    it('FIS-B, and no winds', () => {
+        expect(label({ winds: { CLT: {} }, source: 'fisb' })).toBe('FIS-B');
+        expect(label({ winds: null, source: null })).toBe('');
+    });
+});
+
+describe('winds age: _lastWindsAt is when the winds were downloaded (review of #212)', () => {
+    afterEach(() => { delete globalThis.FlyTabPlanning; });
+    it('a stored model hour loaded later keeps its download time; other sources stamp now', async () => {
+        const fetchedAt = new Date(Date.now() - 5 * 3600_000);
+        const validAt = new Date();
+        globalThis.FlyTabPlanning = { fetchWindsDetailed: async () => ({ winds: { CLT: { 6000: { dir: 270, spd: 10 } } }, source: 'model', model: 'RRFS',
+            validAt, useFrom: new Date(validAt - 1800e3), useTo: new Date(+validAt + 1800e3), fetchedAt, stale: true }) };
+        const p = make();
+        await p._ensureWinds({ force: true });
+        expect(p._lastWindsAt).toBe(fetchedAt.getTime());
+        globalThis.FlyTabPlanning = { fetchWindsDetailed: async () => ({ winds: { CLT: { 6000: { dir: 270, spd: 10 } } }, source: 'fisb' }) };
+        const t0 = Date.now();
+        await p._ensureWinds({ force: true });
+        expect(p._lastWindsAt).toBeGreaterThanOrEqual(t0);
+    });
+});
