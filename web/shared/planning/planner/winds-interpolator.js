@@ -1,7 +1,7 @@
 // @ts-check
 'use strict';
 
-const CACHE_KEY  = 'flypi_winds_cache';
+import { fetchModelWinds } from './model-winds.js';
 
 /**
  * Select the AWC FD forecast cycle based on departure UTC hour.
@@ -60,7 +60,6 @@ export function findNearestFdStation(allWinds, lat, lon, fdLocs) {
     return best;
 }
 
-const FD_PERIODS = ['06', '12', '24'];
 // FIS-B winds are the current forecast: only for a departure this soon.
 const FISB_MAX_AHEAD_MS = 3 * 3600_000;
 // A departure up to this long before the first FOR USE window (between issues) uses that period.
@@ -118,45 +117,6 @@ export function pickFdPeriod(periods, departure) {
     return null;
 }
 
-function cacheKey(cycle) { return `${CACHE_KEY}_${cycle}`; }
-
-function readCachedPeriods() {
-    const out = [];
-    for (const cycle of FD_PERIODS) {
-        try {
-            const c = JSON.parse(localStorage.getItem(cacheKey(cycle)) || 'null');
-            // Entries from before the FOR USE selection have no header: unusable.
-            if (!c?.winds || !c.header) continue;
-            const h = { validAt: new Date(c.header.validAt), useFrom: new Date(c.header.useFrom), useTo: new Date(c.header.useTo) };
-            if ([h.validAt, h.useFrom, h.useTo].some((d) => !Number.isFinite(d.getTime()))) continue;
-            out.push({ cycle, header: h, winds: c.winds });
-        } catch (_) {}
-    }
-    return out;
-}
-
-async function fetchPeriod(base, cycle) {
-    try {
-        const url = `${base}/weather?type=windtemp&region=all&level=low&fcst=${cycle}`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
-        if (!resp.ok) return null;
-        const text = await resp.text();
-        if (typeof WeatherClient === 'undefined' || !WeatherClient.parseAllWindsAloft) return null;
-        const winds = WeatherClient.parseAllWindsAloft(text);
-        const header = parseFdHeader(text);
-        if (!header || Object.keys(winds).length === 0) return null;
-        try {
-            localStorage.setItem(cacheKey(cycle), JSON.stringify({
-                ts: Date.now(), winds,
-                header: { validAt: header.validAt.toISOString(), useFrom: header.useFrom.toISOString(), useTo: header.useTo.toISOString() },
-            }));
-        } catch (_) {}
-        return { cycle, header, winds };
-    } catch (_) {
-        return null;
-    }
-}
-
 function fisbWinds() {
     try {
         const fisb = (typeof window !== 'undefined') ? window.app?.fisbClient?.winds : null;
@@ -179,48 +139,39 @@ function fisbWinds() {
 }
 
 /**
- * Winds aloft for a departure time, and which forecast they are (2026-10-16).
- * The FD period is chosen by its FOR USE window, not by the hour of day
- * (selectFdCycle gave the 12-hour forecast for a departure "now" at 20Z).
- *   1. flywhere proxy: all three periods (06/12/24 h); direct AWC is CORS-blocked
- *   2. Stratux FIS-B, for a departure within FISB_MAX_AHEAD_MS (it is the current forecast)
- *   3. the cached period (localStorage) whose window holds the departure
+ * Winds aloft for a departure time, and which forecast they are.
+ * NOAA stopped the FB/FD winds bulletins on 2026-11-03 (SCN 26-47 AAD) and
+ * AWC's windtemp API answers 400, so the FD fetch is gone (2026-11-08):
+ *   1. model winds (RRFS, GFS past RRFS's range) from Open-Meteo at the FD
+ *      stations: a fetch younger than an hour, or a new one (model-winds.js)
+ *   2. Stratux FIS-B, for a departure within FISB_MAX_AHEAD_MS (the current forecast)
+ *   3. older cached model winds that have the departure hour (in the air, offline)
  * @param {Date} [departureTime]
- * @returns {Promise<{winds: object|null, source: 'fd'|'fisb'|'cache'|null, cycle?: string,
- *   validAt?: Date, useFrom?: Date, useTo?: Date, reason?: 'beyond'|'unavailable', coverTo?: Date}>}
+ * @returns {Promise<{winds: object|null, source: 'model'|'fisb'|null, model?: string,
+ *   validAt?: Date, useFrom?: Date, useTo?: Date, fetchedAt?: Date, stale?: boolean,
+ *   reason?: 'beyond'|'unavailable', coverTo?: Date}>}
  */
 export async function fetchWindsDetailed(departureTime) {
     const dep = departureTime instanceof Date ? departureTime : new Date();
     const now = Date.now();
     // A departure already past (a delay): the current forecast is the best there is.
-    const at = new Date(Math.max(dep.getTime(), now));
-    const base = (typeof Settings !== 'undefined' && Settings.workerBase)
-        ? Settings.workerBase
-        : 'https://www.flywhere.app/api';
-    const fetched = (await Promise.all(FD_PERIODS.map((c) => fetchPeriod(base, c)))).filter(Boolean);
-    const found = (p, source) => ({ winds: p.winds, source, cycle: p.cycle, ...p.header });
+    const at = Math.max(dep.getTime(), now);
+    const stations = (typeof WeatherClient !== 'undefined' && WeatherClient.FD_STATIONS) || null;
+    const m = stations ? await fetchModelWinds(stations, at) : { winds: null, coverTo: null };
 
-    // 1. A period fetched just now.
-    const f = pickFdPeriod(fetched, at);
-    if (f) return found(f, 'fd');
+    // 1. Model winds fetched within the hour.
+    if (m.winds && !m.stale) return m;
     // 2. Stratux FIS-B for a departure soon.
-    if (at.getTime() - now <= FISB_MAX_AHEAD_MS) {
+    if (at - now <= FISB_MAX_AHEAD_MS) {
         const w = fisbWinds();
         if (w) return { winds: w, source: 'fisb' };
     }
-    // 3. A cached period -- also when only some fetches came back (review,
-    //    2026-10-16: the 6-hour alone fetched, the cached 24-hour ignored).
-    const fresh = new Set(fetched.map((p) => p.cycle));
-    const cached = readCachedPeriods().filter((p) => !fresh.has(p.cycle));
-    const c = pickFdPeriod(cached, at);
-    if (c) return found(c, 'cache');
+    // 3. Older model winds for that hour.
+    if (m.winds) return m;
 
-    // None: "beyond" only when the departure is after a forecast that is still
-    // current; a forecast that ended already, or one starting later, is just
-    // "unavailable" (it said "forecast to <yesterday>").
-    const all = [...fetched, ...cached];
-    const coverTo = all.reduce((m, p) => (!m || p.header.useTo > m ? p.header.useTo : m), null);
-    const beyond = coverTo && coverTo.getTime() > now && at.getTime() >= coverTo.getTime();
+    // None: "beyond" only when the departure is past a forecast that is still current.
+    const coverTo = m.coverTo || null;
+    const beyond = coverTo && coverTo.getTime() > now && at >= coverTo.getTime();
     return beyond
         ? { winds: null, source: null, reason: 'beyond', coverTo }
         : { winds: null, source: null, reason: 'unavailable' };

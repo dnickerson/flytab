@@ -96,93 +96,103 @@ describe('pickFdPeriod: the period whose FOR USE window holds the departure', ()
     });
 });
 
-describe('fetchWindsDetailed: all three periods, the right one for the departure', () => {
+describe('fetchWindsDetailed: model winds (RRFS/GFS via Open-Meteo); FD bulletins ended 2026-11-03', () => {
+    // A real Open-Meteo RRFS answer for CLT, CAE, DEN, 2026-11-08 12Z-15Z.
+    const RRFS = JSON.parse(readFileSync('tests/fixtures/winds/openmeteo-rrfs-clt-cae-den-20261108.json', 'utf8'));
+    const NOW = new Date('2026-11-08T12:10:00Z');
     const store = {};
+    let calls;
     beforeEach(() => {
         for (const k of Object.keys(store)) delete store[k];
+        calls = [];
         globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
-        globalThis.WeatherClient = { parseAllWindsAloft: (t) => ({ ABI: { 6000: { dir: 0, spd: Number(/FD(\d)US/.exec(t)[1]) } } }) };
-        vi.useFakeTimers({ now: REF, toFake: ['Date'] });
+        globalThis.WeatherClient = { FD_STATIONS: { CLT: [35.21, -80.94], CAE: [33.94, -81.12], DEN: [39.86, -104.67] } };
+        vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
     });
     afterEach(() => { vi.useRealTimers(); delete globalThis.fetch; delete globalThis.WeatherClient; delete globalThis.window; });
-    const online = () => { globalThis.fetch = vi.fn(async (url) => ({ ok: true, text: async () => FD[/fcst=(\d+)/.exec(url)[1]] })); };
+    const answer = (byModel) => { globalThis.fetch = vi.fn(async (url) => {
+        calls.push(url);
+        const model = new URL(url).searchParams.get('models');
+        const body = byModel[model];
+        if (body === undefined) throw new Error('offline');
+        return { ok: true, json: async () => body };
+    }); };
+    const nullHours = (json) => json.map((loc) => ({ ...loc, hourly: Object.fromEntries(Object.entries(loc.hourly).map(([k, v]) => [k, k === 'time' ? v : v.map(() => null)])) }));
 
-    it('online: tomorrow 09:00 EDT gets the 24-hour forecast, and says which', async () => {
-        online();
-        const r = await fetchWindsDetailed(new Date('2026-10-17T13:00:00Z'));
-        expect(r.source).toBe('fd');
-        expect(r.cycle).toBe('24');
-        expect(r.winds.ABI[6000].spd).toBe(5);                  // FD5US5 = the 24-hour product
-        expect(iso(r.validAt)).toBe('2026-10-17T18:00');
-        expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+    it('online: RRFS winds for the departure hour, at the FD stations, and says which', async () => {
+        answer({ ncep_rrfs_conus: RRFS });
+        const r = await fetchWindsDetailed(new Date('2026-11-08T13:20:00Z'));
+        expect(r.source).toBe('model');
+        expect(r.model).toBe('RRFS');
+        expect(r.validAt.toISOString()).toBe('2026-11-08T13:00:00.000Z');
+        expect(Object.keys(r.winds).sort()).toEqual(['CAE', 'CLT', 'DEN']);
+        expect(getWindAtAlt(r.winds.CLT, 6000)).toMatchObject({ dir: expect.any(Number), spd: expect.any(Number) });
+        // The request: RRFS, knots, GMT, the hours around the departure.
+        const q = new URL(calls[0]).searchParams;
+        expect(q.get('wind_speed_unit')).toBe('kn');
+        expect(q.get('start_hour')).toBe('2026-11-08T12:00');
+        expect(q.get('end_hour')).toBe('2026-11-09T01:00');
     });
 
-    it('past the forecast: no winds, and why (with where it ends)', async () => {
-        online();
-        const r = await fetchWindsDetailed(new Date('2026-10-18T13:00:00Z'));
-        expect(r.winds).toBeNull();
-        expect(r.reason).toBe('beyond');
-        expect(iso(r.coverTo)).toBe('2026-10-18T00:00');
+    it('a second ask within the hour uses the stored fetch: no new request (Open-Meteo allowance)', async () => {
+        answer({ ncep_rrfs_conus: RRFS });
+        await fetchWindsDetailed(new Date('2026-11-08T13:00:00Z'));
+        const again = await fetchWindsDetailed(new Date('2026-11-08T14:00:00Z'));
+        expect(calls).toHaveLength(1);
+        expect(again.validAt.toISOString()).toBe('2026-11-08T14:00:00.000Z');
     });
 
-    it('offline: the cached period that covers the departure; not a cached one that does not', async () => {
-        online();
-        await fetchWindsDetailed(new Date());                    // caches all three
-        globalThis.fetch = vi.fn(async () => { throw new Error('offline'); });
-        const r = await fetchWindsDetailed(new Date('2026-10-17T05:00:00Z'));
-        expect([r.source, r.cycle]).toEqual(['cache', '12']);
-        const far = await fetchWindsDetailed(new Date('2026-10-18T13:00:00Z'));
-        expect(far.winds).toBeNull();
+    it('a departure past RRFS\'s range (its hours null): GFS', async () => {
+        answer({ ncep_rrfs_conus: nullHours(RRFS), gfs_seamless: RRFS });
+        const r = await fetchWindsDetailed(new Date('2026-11-08T13:00:00Z'));
+        expect(r.model).toBe('GFS');
+        expect(calls.map((u) => new URL(u).searchParams.get('models'))).toEqual(['ncep_rrfs_conus', 'gfs_seamless']);
     });
 
-    it('offline, Stratux FIS-B winds: used for a departure soon, not for tomorrow', async () => {
-        globalThis.fetch = vi.fn(async () => { throw new Error('offline'); });
+    it('offline in the air: the stored fetch an hour later still gives that hour (marked stale)', async () => {
+        answer({ ncep_rrfs_conus: RRFS });
+        await fetchWindsDetailed(new Date('2026-11-08T12:10:00Z'));
+        vi.setSystemTime(new Date('2026-11-08T14:40:00Z'));          // 2.5 h later, no internet
+        answer({});
+        const r = await fetchWindsDetailed(new Date('2026-11-08T14:40:00Z'));
+        expect(r.source).toBe('model');
+        expect(r.stale).toBe(true);
+        expect(r.validAt.toISOString()).toBe('2026-11-08T15:00:00.000Z');
+    });
+
+    it('offline: fresh Stratux FIS-B winds win over old stored model winds for a departure soon', async () => {
+        answer({ ncep_rrfs_conus: RRFS });
+        await fetchWindsDetailed(new Date('2026-11-08T12:10:00Z'));
+        vi.setSystemTime(new Date('2026-11-08T13:30:00Z'));
+        answer({});
         globalThis.window = { app: { fisbClient: { winds: new Map([['CLT:6000', { dir: 270, spd: 22 }]]) } } };
-        const soon = await fetchWindsDetailed(new Date('2026-10-16T21:00:00Z'));
-        expect(soon.source).toBe('fisb');
-        expect(soon.winds.CLT[6000].spd).toBe(22);
-        const tomorrow = await fetchWindsDetailed(new Date('2026-10-17T13:00:00Z'));
-        expect(tomorrow.winds).toBeNull();
-        expect(tomorrow.reason).toBe('unavailable');
+        const r = await fetchWindsDetailed(new Date('2026-11-08T13:30:00Z'));
+        expect(r.source).toBe('fisb');
+        expect(r.winds.CLT[6000].spd).toBe(22);
     });
 
-    it('a partial fetch (only the 6-hour came back): the cached period that covers tomorrow is used (review, 2026-10-16)', async () => {
-        online();
-        await fetchWindsDetailed(new Date());                    // caches all three
-        globalThis.fetch = vi.fn(async (url) => (/fcst=06/.test(url) ? { ok: true, text: async () => FD['06'] } : (() => { throw new Error('timeout'); })()));
-        const r = await fetchWindsDetailed(new Date('2026-10-17T13:00:00Z'));
-        expect([r.source, r.cycle]).toEqual(['cache', '24']);
-    });
-
-    it('a departure time already past (a delay): the current forecast, not "no winds" (review, 2026-10-16)', async () => {
-        online();
-        const r = await fetchWindsDetailed(new Date('2026-10-16T14:00:00Z'));     // 6 h ago
-        expect([r.source, r.cycle]).toEqual(['fd', '06']);
-        const old = await fetchWindsDetailed(new Date('2026-10-12T14:00:00Z'));   // days ago
-        expect(old.cycle).toBe('06');
-    });
-
-    it('offline with only yesterday\'s cache: "unavailable", not "no forecast yet" ending yesterday', async () => {
-        online();
-        await fetchWindsDetailed(new Date());
-        vi.setSystemTime(new Date('2026-10-18T15:00:00Z'));      // a day later, all periods ended
-        globalThis.fetch = vi.fn(async () => { throw new Error('offline'); });
-        const r = await fetchWindsDetailed(new Date('2026-10-18T16:00:00Z'));
+    it('offline, nothing stored: no winds, "unavailable"', async () => {
+        answer({});
+        const r = await fetchWindsDetailed(new Date('2026-11-08T13:00:00Z'));
         expect(r.winds).toBeNull();
         expect(r.reason).toBe('unavailable');
     });
 
-    it('only the 24-hour period fetched, departure now, nothing cached: not "beyond" (the forecast starts later)', async () => {
-        globalThis.fetch = vi.fn(async (url) => (/fcst=24/.test(url) ? { ok: true, text: async () => FD['24'] } : (() => { throw new Error('timeout'); })()));
-        const r = await fetchWindsDetailed(new Date());
-        expect(r.winds).toBeNull();
-        expect(r.reason).toBe('unavailable');
+    it('Open-Meteo says 429 (over its per-minute allowance): stop, no GFS request on top; stored winds used', async () => {
+        answer({ ncep_rrfs_conus: RRFS });
+        await fetchWindsDetailed(new Date('2026-11-08T12:10:00Z'));
+        vi.setSystemTime(new Date('2026-11-08T13:30:00Z'));             // stored fetch now over an hour old
+        calls = [];
+        globalThis.fetch = vi.fn(async (url) => { calls.push(url); return { ok: false, status: 429, json: async () => ({}) }; });
+        const r = await fetchWindsDetailed(new Date('2026-11-08T13:30:00Z'));
+        expect(calls).toHaveLength(1);
+        expect(r.model).toBe('RRFS');
+        expect(r.stale).toBe(true);
     });
 
-    it('a cache entry from before this change (no header) is not used', async () => {
-        store['flypi_winds_cache_12'] = JSON.stringify({ ts: Date.now(), winds: { OLD: {} } });
-        globalThis.fetch = vi.fn(async () => { throw new Error('offline'); });
-        const r = await fetchWindsDetailed(new Date('2026-10-17T05:00:00Z'));
-        expect(r.winds).toBeNull();
+    it('no FD fetch any more: nothing asks AWC windtemp', async () => {
+        answer({ ncep_rrfs_conus: RRFS });
+        await fetchWindsDetailed(new Date('2026-11-08T13:00:00Z'));
+        expect(calls.every((u) => u.startsWith('https://api.open-meteo.com/'))).toBe(true);
     });
 });

@@ -903,7 +903,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
      * Winds for the checks and figures. The base only loads them for a stored
      * plan (_applyWindsToLastPlan), so a route typed here, or a Plan route that
      * needed a fuel stop, was worked out in calm air (review, 2026-10-16).
-     * fetchWinds: flywhere proxy, else FIS-B from Stratux, else the local cache.
+     * fetchWindsDetailed: model winds (RRFS/GFS via Open-Meteo, cached for flight), else FIS-B from Stratux.
      * A failed try is not repeated for WINDS_RETRY_MS (in the air the proxy
      * attempt waits out its 8 s timeout every time).
      */
@@ -962,14 +962,16 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         return this._ensureWinds({ force: true });
     }
 
-    /** "FD 17/18Z" (the forecast's valid time, UTC), "FIS-B", or ''. */
+    /** "RRFS 08/15Z" / "GFS 08/15Z" (the model and the hour the winds are for, UTC), "FIS-B", or ''.
+     *  FD bulletins ended 2026-11-03; their label stays for a forecast without a model name. */
     _windsLabel() {
         const w = this._windsInfo;
         if (!w?.winds) return '';
         if (w.source === 'fisb') return 'FIS-B';
         const v = w.validAt;
         if (v instanceof Date && Number.isFinite(v.getTime())) {
-            return `FD ${String(v.getUTCDate()).padStart(2, '0')}/${String(v.getUTCHours()).padStart(2, '0')}Z`;
+            const name = w.source === 'model' ? (w.model || 'MODEL') : 'FD';
+            return `${name} ${String(v.getUTCDate()).padStart(2, '0')}/${String(v.getUTCHours()).padStart(2, '0')}Z`;
         }
         return '';
     }
@@ -1565,7 +1567,7 @@ class RoutePlannerV2 extends RoutePlannerPanel {
         if (wi?.winds && this._lastWinds && wi.useTo instanceof Date && hasEnds
             && Math.max(this._departureTime ? this._departureTime.getTime() : 0, Date.now()) >= wi.useTo.getTime()) {
             problems.push({ severity: 'amber', code: 'winds-old', pillIndexes: [], fixes: [],
-                message: `Winds from a forecast that has ended (${this._windsLabel() || 'FD'}) — no newer one loaded` });
+                message: `Winds from a forecast that has ended (${this._windsLabel() || 'winds'}) — no newer one loaded` });
         }
         // Winds tried and none for this departure: say so (calm-air figures).
         if (this._windsInfo && !this._lastWinds && hasEnds) {
