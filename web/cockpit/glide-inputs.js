@@ -9,6 +9,8 @@
  *   glideWind()  winds aloft at the aircraft: FIS-B, else the route planner's downloaded winds
  *   runwayWind() the wind to land in: the airport's METAR (FIS-B, else the panel's internet one, else the cached
  *                one), else the nearest station
+ *   glideWindFor() the wind the glide legs use, in two layers split at surfaceWindMaxAglFt above the field: winds
+ *                aloft (else the assumed headwind) above, the runway (surface) wind below - spec 2026-11-06
  *
  * Only data already on the tablet is read; nothing here touches the network (no internet in flight).
  * Every missing or untrusted input takes the more conservative path: a missing wind is `null` / 'none'
@@ -16,7 +18,7 @@
  * unfixed GPS situation gives no aircraft at all.
  *
  * Data shapes (verified 2026-10-31):
- *   NASR runway (airport.runways[]): length_ft, surface, per end (base_ / recip_) id, lat, lon,
+ *   NASR runway (airport.runways[]): length_ft, width_ft, surface, per end (base_ / recip_) id, lat, lon,
  *     thr_lat, thr_lon, true_hdg. Keys are ABSENT (or null) when the FAA gave nothing.
  *   FisbClient: metars Map(icao -> { raw, decoded, received_at }), decoded.observed_at (ISO),
  *     wind_dir (null for VRB), wind_speed, wind_gust (kt); getNearestWind(lat, lon, alt) ->
@@ -82,10 +84,12 @@ const GlideInputs = (() => {
             glide_ias_kt: [30, 200],        // no safe side: a slower glide turns in less height (review R29)
             glide_sink_fpm: [100, 3000, 'higher'],
             glide_density_pct_per_kft: [0, 5],
+            vs1_kt: [20, 120, 'lower'],     // a lower stall speed calls fewer "rolling on the runway" OVERs (Decision A)
         },
         pilot: {
             turnBankDeg: [10, 60],          // 90 or more would make 1 / cos(bank)^1.5 blow up
             marginFt: [0, 2000, 'higher'],
+            // lineUpFtPerDeg, finalPoint*, planBHysteresisFt: still validated, no longer used by the model (spec 2026-11-06)
             lineUpFtPerDeg: [0, 10, 'higher'],
             finalPointFraction: [0, 1],
             finalPointMinFt: [0, 5000],
@@ -98,6 +102,7 @@ const GlideInputs = (() => {
             metarMaxAgeMin: [10, 240, 'lower'],
             metarMaxStationNm: [0, 100, 'lower'],
             showAboveGsKt: [0, 200],
+            surfaceWindMaxAglFt: [0, 3000, 'lower'],   // Dana 2026-11-06: the ground wind only up to 1,000 ft at most
         },
     };
 
@@ -160,7 +165,11 @@ const GlideInputs = (() => {
      * -> { elevFt, ref, ends, refLatLon, excluded, noSuitable }
      * elevFt: field elevation (null when the record has none - the caller shows no block).
      * ref: {x:0, y:0}, the airport reference point; refLatLon: its { lat, lon } (null when unknown).
-     * ends: model runway ends { id, runwayId, thr, hdgTrue, rwyLenFt, mid, rwy: {a, b} } in local nm.
+     * ends: model runway ends { id, runwayId, thr, phys, elevFt, hdgTrue, rwyLenFt, mid, widthFt, rwy: {a, b} } in local nm
+ *   thr: the landing threshold (physical end when it cannot be right); phys: the end's physical end (base_/recip_
+ *   lat, lon; the threshold when there is none) - the short-final target; elevFt: the end's NASR elevation
+ *   (base_/recip_elev_ft, null when unknown: the model then uses the field elevation); widthFt: the runway's
+ *   width_ft, DEFAULT_WIDTH_FT when unknown.
      * excluded: 'heliport' | 'seaplane' | null. noSuitable: the airport has runways but none qualifies.
      */
     function airport(rec, settings_) {
@@ -203,6 +212,9 @@ const GlideInputs = (() => {
         return pastMid || !(fromEndFt <= lenFt / 2) ? phys : thr;
     }
 
+    /** Runway width (ft) when the NASR record has none: the model's "over the runway" gate uses it. */
+    const DEFAULT_WIDTH_FT = 100;
+
     /** One runway -> its model ends (0, 1 or 2): an end needs a threshold (else physical end) and a heading. */
     function runwayEnds(r, refLat, refLon) {
         const sides = ['base', 'recip'];
@@ -214,10 +226,11 @@ const GlideInputs = (() => {
             const hdg = r[s + '_true_hdg'];
             return {
                 side: s, id: r[s + '_id'], phys: loc(phys || thr), thr: loc(thr), hasPhys: !!phys,
-                hdg: isNum(hdg) ? norm360(hdg) : null,
+                hdg: isNum(hdg) ? norm360(hdg) : null, elev: isNum(r[s + '_elev_ft']) ? r[s + '_elev_ft'] : null,
             };
         });
         const bothKnown = !!(info[0].thr && info[1].thr);
+        const widthFt = isNum(r.width_ft) && r.width_ft > 0 ? r.width_ft : DEFAULT_WIDTH_FT;
         const ends = [];
         for (let i = 0; i < 2; i++) {
             const me = info[i], other = info[1 - i];
@@ -249,7 +262,8 @@ const GlideInputs = (() => {
             ends.push({
                 id: me.id != null && me.id !== '' ? String(me.id) : (fallbackId || me.side),
                 runwayId: r.id != null ? String(r.id) : null,
-                thr: sensibleThreshold(me, hdg, mid, lenFt), hdgTrue: hdg, rwyLenFt: lenFt, mid, rwy: { a, b },
+                thr: sensibleThreshold(me, hdg, mid, lenFt), phys: me.phys, elevFt: me.elev,
+                hdgTrue: hdg, rwyLenFt: lenFt, mid, widthFt, rwy: { a, b },
             });
         }
         return ends;
@@ -328,6 +342,9 @@ const GlideInputs = (() => {
         return best ? { winds: best._lastWinds, at: best._lastWindsAt } : null;
     }
 
+    /** The label with no winds aloft and no surface wind (validated settings S). */
+    const assumedLabel = (S) => `NO CURRENT WINDS ALOFT · ${S.pilot.noWindHeadwindKt} kt headwind assumed`;
+
     /**
      * -> { wind: { from, kt } | null, label }
      * FIS-B first (station within windMaxStationNm, received within windMaxAgeMin), else the route planner's
@@ -338,7 +355,7 @@ const GlideInputs = (() => {
     function glideWind(lat, lon, altMsl, settings_, now = Date.now()) {
         const S = validate(settings_);
         const maxNm = S.pilot.windMaxStationNm, maxAgeMs = S.pilot.windMaxAgeMin * MS_PER_MIN;
-        const none = { wind: null, label: `NO CURRENT WINDS ALOFT · ${S.pilot.noWindHeadwindKt} kt headwind assumed` };
+        const none = { wind: null, label: assumedLabel(S) };
         if (!isLL(lat, lon) || !isNum(altMsl)) return none;
         const text = (dir, kt, level, src) => `${pad3(dir)}/${pad2(kt)} at ${fmtFt(level)} ft · ${src}`;
 
@@ -393,26 +410,26 @@ const GlideInputs = (() => {
     }
 
     /**
-     * A decoded METAR's wind as a well-formed RunwayWind: calm | vrb | metar (from, kt > 0 finite) | null
-     * when the report has no parseable wind.
+     * A decoded METAR's wind as a well-formed RunwayWind: calm | vrb (kt > 0, gustKt|null) | metar (from, kt > 0
+     * finite, gustKt|null) | null when the report has no parseable wind.
      */
     function windOf(d) {
         if (!d || !isNum(d.wind_speed) || d.wind_speed < 0) return null;
         if (d.wind_speed === 0) return { kind: 'calm' };
+        const gustKt = isNum(d.wind_gust) && d.wind_gust > 0 ? d.wind_gust : null;
         // FIS-B decodes VRB as wind_dir null; the AWC decoder (WeatherClient) as the string 'VRB' (+ wind_variable)
         if (d.wind_variable === true || d.wind_dir === null || d.wind_dir === undefined
-            || (typeof d.wind_dir === 'string' && /^VRB$/i.test(d.wind_dir.trim()))) return { kind: 'vrb' };
+            || (typeof d.wind_dir === 'string' && /^VRB$/i.test(d.wind_dir.trim()))) {
+            return { kind: 'vrb', kt: d.wind_speed, gustKt };
+        }
         if (!isNum(d.wind_dir) || d.wind_dir < 0 || d.wind_dir > 360) return null;
-        return {
-            kind: 'metar', from: d.wind_dir, kt: d.wind_speed,
-            gustKt: isNum(d.wind_gust) && d.wind_gust > 0 ? d.wind_gust : null,
-        };
+        return { kind: 'metar', from: d.wind_dir, kt: d.wind_speed, gustKt };
     }
 
     function windLabel(icao, w, speedKt, min) {
         let t;
         if (w.kind === 'calm') t = 'calm';
-        else if (w.kind === 'vrb') t = 'VRB/' + pad2(speedKt);
+        else if (w.kind === 'vrb') t = 'VRB/' + pad2(speedKt) + (w.gustKt ? 'G' + pad2(w.gustKt) : '');
         else t = `${pad3(w.from)}/${pad2(w.kt)}${w.gustKt ? 'G' + pad2(w.gustKt) : ''}`;
         return `METAR ${icao} ${t} (${Math.round(min)} min)`;
     }
@@ -445,7 +462,7 @@ const GlideInputs = (() => {
 
     /**
      * -> { wind: RunwayWind, label }   (RunwayWind: { kind:'metar', from, kt, gustKt|null } | { kind:'calm' }
-     *                                   | { kind:'vrb' } | { kind:'none' })
+     *                                   | { kind:'vrb', kt, gustKt|null } | { kind:'none' })
      * The airport's own METAR - FIS-B first, else the internet METAR the airport panel shows
      * (app.vectorLayers._internetMetars), else the one in the weather cache - when observed within metarMaxAgeMin;
      * else the nearest FIS-B METAR station within metarMaxStationNm under the same age rule; else none.
@@ -495,8 +512,77 @@ const GlideInputs = (() => {
         return none;
     }
 
+    // ---- The glide wind (spec 2026-11-06: decision 2, "Surface wind only in the lowest 1,000 ft") ---------
+
+    /** The runway (surface) wind as a model glide wind, or null when there is none. */
+    function surfaceGlideWind(runway) {
+        const w = runway && runway.wind;
+        // noTail: a surface wind never helps the glide (a tailwind component counts as 0; spec 2026-11-06 review)
+        if (w && w.kind === 'metar' && isNum(w.from) && isNum(w.kt)) {
+            return { from: w.from, kt: w.kt, gustKt: isNum(w.gustKt) ? w.gustKt : null, noTail: true };
+        }
+        if (w && w.kind === 'vrb') {
+            const kts = [w.kt, w.gustKt].filter(isNum);
+            if (kts.length) return { headKt: Math.max(...kts) };
+        }
+        if (w && w.kind === 'calm') return { headKt: 0 };
+        return null;
+    }
+
+    /**
+     * The wind the glide legs use: two layers split at L = surfaceWindMaxAglFt above the field.
+     *   upper (above L): the winds aloft (`aloft`, a glideWind() result) when trusted, else none (the assumed
+     *                    noWindHeadwindKt headwind);
+     *   lower (below L): the runway (surface) wind (`runway`, a runwayWind() result: METAR { from, kt, gustKt,
+     *                    noTail: true }, VRB n (gust g) -> { headKt: max(n, g) }, calm -> { headKt: 0 }), else the
+     *                    upper layer's wind.
+     * Weights over the height glided, from `hAglFt` (current height above the field) down to marginFt:
+     * wUp = max(0, h - max(L, margin)) / (that + max(0, min(h, L) - margin)), wLow = 1 - wUp
+     * (nothing glided: lower only when h <= L, else upper only; h unknown: upper only).
+     * -> { wind, label, assumed, source, parts }
+     *   wind    one layer: that wind (null | vector | { headKt }); two: { layers: [{ wind: upper, w: wUp },
+     *           { wind: lower, w: wLow }] } (the shape GlideModel.plan takes)
+     *   label   one layer: the aloft label ("250/14 at 3,000 ft · FIS-B"), "<runway label> · surface", or
+     *           "NO CURRENT WINDS ALOFT · 10 kt headwind assumed"; two: "<aloft label> above 1,000 ft · <runway label>
+     *           below" or "assumed 10 kt headwind above 1,000 ft · <runway label> below"
+     *   assumed true when the assumed headwind is used (it has weight > 0)
+     *   source  'aloft' | 'surface' | 'assumed' (one layer) | 'layered'
+     *   parts   [{ text, amber }]: the label's parts, amber = the assumed part (the panel colours only that part)
+     */
+    function glideWindFor(aloft, runway, settings_, hAglFt) {
+        const S = validate(settings_);
+        const L = S.pilot.surfaceWindMaxAglFt;
+        const aloftOk = !!(aloft && aloft.wind && isNum(aloft.wind.from) && isNum(aloft.wind.kt));
+        const low = surfaceGlideWind(runway);
+        const h = isNum(hAglFt) ? hAglFt : Infinity;
+        // Weights over the height actually glided: from h down to the margin height (the plan's target), split
+        // at L. Using the full height overweighted the lower layer (~3% optimistic with a strong headwind aloft).
+        const m = S.pilot.marginFt;
+        let wUp = 1;
+        if (h !== Infinity) {
+            const up = Math.max(0, h - Math.max(L, m)), lo = Math.max(0, Math.min(h, L) - m);
+            wUp = up + lo > 0 ? up / (up + lo) : (h > L ? 1 : 0);
+        }
+        const one = (wind, label, assumed, source) => ({ wind, label, assumed, source, parts: [{ text: label, amber: assumed }] });
+        const upperOnly = () => (aloftOk ? one(aloft.wind, String(aloft.label || ''), false, 'aloft')
+            : one(null, assumedLabel(S), true, 'assumed'));
+        if (!low || wUp >= 1) return upperOnly();              // no surface wind (lower = upper), or above it all
+        const rwyLabel = String((runway && runway.label) || 'surface wind');
+        if (wUp <= 0) return one(low, `${rwyLabel} · surface`, false, 'surface');
+        const above = `above ${fmtFt(L)} ft`;
+        const upText = aloftOk ? `${String(aloft.label || '')} ${above}` : `assumed ${fmtFt(S.pilot.noWindHeadwindKt)} kt headwind ${above}`;
+        const lowText = `${rwyLabel} below`;
+        return {
+            wind: { layers: [{ wind: aloftOk ? aloft.wind : null, w: wUp }, { wind: low, w: 1 - wUp }] },
+            label: `${upText} · ${lowText}`,
+            assumed: !aloftOk,
+            source: 'layered',
+            parts: [{ text: upText, amber: !aloftOk }, { text: lowText, amber: false }],
+        };
+    }
+
     return {
-        SIT_MAX_AGE_MS, settings, validate, airport, aircraft, aircraftStatus, glideWind, runwayWind,
+        SIT_MAX_AGE_MS, settings, validate, airport, aircraft, aircraftStatus, glideWind, runwayWind, glideWindFor,
         _resetCaches() { stationCoords.clear(); },
     };
 })();

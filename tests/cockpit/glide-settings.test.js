@@ -24,7 +24,10 @@ const AC_KEYS = ['glide_ias_kt', 'glide_sink_fpm', 'glide_density_pct_per_kft'];
 const PILOT_KEYS = Object.keys(D.pilot);
 // showAboveGsKt has no Configuration field any more (the airport panel's ENGINE OUT button shows / hides
 // the glide block); the key and its 25 kt default stay for EmergencyGlide.
-const EDITOR_PILOT_KEYS = PILOT_KEYS.filter((k) => k !== 'showAboveGsKt');
+// The five settings the model no longer uses (spec 2026-11-06 decision 1) have no field either; their keys stay
+// in cockpit-config / GlideInputs.validate with no effect.
+const RETIRED_KEYS = ['lineUpFtPerDeg', 'finalPointFraction', 'finalPointMinFt', 'finalPointMaxFt', 'planBHysteresisFt'];
+const EDITOR_PILOT_KEYS = PILOT_KEYS.filter((k) => k !== 'showAboveGsKt' && !RETIRED_KEYS.includes(k));
 
 function serveBundles() {
     globalThis.fetch = vi.fn((url) => Promise.resolve({
@@ -93,17 +96,19 @@ describe('invalid settings fall back on the safe side', () => {
     });
 
     it('R29 regression: a glide-speed typo (6 kt) must not make plan B reachable over the runway', () => {
-        // 5,000 ft runway 18/36, calm, sink 700, 30 deg bank; aircraft over mid-runway at 500 ft AGL heading away
+        // 5,000 ft runway 18/36, calm, sink 700, 30 deg bank; aircraft abeam mid-runway at 500 ft AGL heading away
         // (east). At 30 kt the turn back costs so little height that plan B shows spare (the corner the reviewer
         // found: raising "6" to the 30 kt edge); with the default 65 kt it is out of reach.
+        // 0.04 nm (243 ft) east of the centreline: just outside the over-the-runway gate (50 + 150 ft for an
+        // unknown width), which since the 2026-11-06 rulings plans a high pass over the runway with no turn.
         const FT_PER_NM = 6076.12, ELEV = 486, half = 2500 / FT_PER_NM;
         const a = { x: 0, y: -half }, b = { x: 0, y: half }, mid = { x: 0, y: 0 };
         const airport = { elevFt: ELEV, ref: { x: 0, y: 0 }, ends: [
             { id: '36', runwayId: '18/36', thr: a, hdgTrue: 0, rwyLenFt: 5000, mid, rwy: { a, b } },
             { id: '18', runwayId: '18/36', thr: b, hdgTrue: 180, rwyLenFt: 5000, mid, rwy: { a, b } },
         ] };
-        const plan = (s) => GlideModel.plan({ airport, ac: { pos: { x: 0, y: 0 }, altMsl: ELEV + 500, gs: 70, trkTrue: 90, vs: 0 },
-            glideWind: null, runwayWind: { kind: 'calm' }, preferDirect: false }, s);
+        const plan = (s) => GlideModel.plan({ airport, ac: { pos: { x: 0.04, y: 0 }, altMsl: ELEV + 500, gs: 70, trkTrue: 90, vs: 0 },
+            glideWind: null, runwayWind: { kind: 'calm' } }, s);
         const S = (aircraft) => GlideInputs.validate({ aircraft, pilot: {} });
         expect(S({}).aircraft).toMatchObject({ glide_ias_kt: 65, glide_sink_fpm: 700 });
         expect(S({}).pilot.turnBankDeg).toBe(30);
@@ -218,6 +223,20 @@ describe('Configuration shows every glide field and saves it', () => {
         }
         expect(field(ed, 'engineOutGlide', 'showAboveGsKt')).toBeNull();
         expect(ed._el.textContent).not.toContain('Show Glide Block Above Ground Speed');
+        // the retired final-point / line-up / hysteresis settings have no field
+        for (const k of RETIRED_KEYS) expect(field(ed, 'engineOutGlide', k), k).toBeNull();
+        expect(ed._el.textContent).not.toMatch(/Final Point|Line-Up Cost|Plan B Switch Hysteresis/);
+    });
+
+    it('retired settings saved before their fields were removed survive a save untouched (no effect on the model)', async () => {
+        const old = { lineUpFtPerDeg: 3, finalPointFraction: 0.5, finalPointMinFt: 700, finalPointMaxFt: 1200, planBHysteresisFt: 150 };
+        localStorage.setItem('flypi_user_cockpit', JSON.stringify({ engineOutGlide: { ...old } }));
+        const ed = await openEditor();
+        field(ed, 'engineOutGlide', 'turnBankDeg').value = '25';
+        await ed._save();
+        const ck = JSON.parse(localStorage.getItem('flypi_user_cockpit'));
+        expect(ck.engineOutGlide).toMatchObject(old);
+        expect(ck.engineOutGlide.turnBankDeg).toBe(25);
     });
 
     it('a showAboveGsKt saved before the field was removed survives a save (EmergencyGlide still reads it)', async () => {

@@ -1,6 +1,7 @@
 /**
  * GlidePanel (web/cockpit/glide-panel.js): the live engine-out glide block in the airport panel
- * and its line to the final point on the map.
+ * and its line to the planned point on the map (spec 2026-11-06: the nearest part of the runway, the
+ * runway end on a short final, nothing over the runway).
  *
  * Real model (GlideModel), real adapter (GlideInputs), real MagVar; stubbed: the Stratux situation,
  * FIS-B (winds aloft, METARs), the NASR store and Leaflet. Data shapes as verified for Task 2:
@@ -32,6 +33,24 @@ const KLKR = {
     icao: 'KLKR', name: 'Lancaster County-Mc Whirter Fld', lat: 34.722904, lon: -80.85459,
     elev_ft: 486, fac_type: 'AIRPORT', runways: [KLKR_RWY],
 };
+
+/** The 06 physical end in KLKR's local plane, and a situation `nm` before it on the 06 extended centreline. */
+const PHYS06 = () => GlideModel.toLocal(KLKR.lat, KLKR.lon, KLKR_RWY.base_lat, KLKR_RWY.base_lon);
+function onFinal06(nm, alt, over = {}) {
+    const e = PHYS06(), b = 239 * Math.PI / 180;
+    const p = GlideModel.fromLocal(KLKR.lat, KLKR.lon, { x: e.x + nm * Math.sin(b), y: e.y + nm * Math.cos(b) });
+    return {
+        lat: p.lat, lon: p.lon, alt_msl: alt, alt_baro: alt - 200, ground_speed: 70, true_course: 59,
+        vertical_speed: -500, gps_fix_quality: 1, timestamp: NOW - 500, ...over,
+    };
+}
+/** A situation over the 06/24 centreline, `k` of the way from the 06 end to the 24 end. */
+function overRwy(k, alt, trk = 59, over = {}) {
+    const lat = KLKR_RWY.base_lat + k * (KLKR_RWY.recip_lat - KLKR_RWY.base_lat);
+    const lon = KLKR_RWY.base_lon + k * (KLKR_RWY.recip_lon - KLKR_RWY.base_lon);
+    return { lat, lon, alt_msl: alt, alt_baro: alt, ground_speed: 40, true_course: trk, vertical_speed: 0,
+        gps_fix_quality: 1, timestamp: NOW - 500, ...over };
+}
 
 /** A lat/lon `nm` from KLKR's reference point on true bearing `brg`. */
 const at = (brg, nm) => GlideModel.fromLocal(KLKR.lat, KLKR.lon,
@@ -167,46 +186,131 @@ afterEach(() => {
 });
 
 describe('GlidePanel verdicts', () => {
-    it('GLIDE OK: a final point is reachable', () => {
+    it('GLIDE OK: the nearest part of the runway is reachable (green, spec 2026-11-06)', () => {
         sit = situation(180, 6, 5500, 360);           // 6 nm south, 5,500 ft, northbound
         panel = new GlidePanel(host, KLKR);
-        panel.start();
+        const plan = panel.start() || panel.render(NOW);
+        expect(plan.kind).toBe('direct');
         expect(block().classList.contains('glide-ok')).toBe(true);
         // 2026-11-04 redesign: "N ft high" verdict and the TO / HEADING / DISTANCE / AIRSPEED / DESCENT /
         // GLIDE PATH rows replace "ft to spare", "Fly … to …", "Be at … or higher there" and the
         // TARGET / PROJECTED / MEASURED cells.
-        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft high/);
-        expect(cellText('TO')).toBe('RWY 24');
+        expect(text()).toMatch(/^✓ GLIDE OK · [\d,]+ ft high/);
+        expect(host.querySelector('.glide-sub')).toBeNull();
+        expect(cellText('TO')).toBe('RWY 06/24 nearest part');
         expect(cellText('HEADING')).toMatch(/^\d{3}° (↑ on course|↱ turn right \d+°|↰ turn left \d+°)$/);
         expect(cellText('DISTANCE')).toMatch(/^\d+\.\d nm$/);
         expect(cellText('AIRSPEED')).toBe('65 KIAS');
         // one situation: no rate from GPS altitude yet, and situation.vertical_speed is never used
-        expect(cellText('DESCENT')).toMatch(/^\d{3} fpm now —$/);
-        expect(cellText('GLIDE PATH')).toMatch(/^\+\d{1,3} ft$/);
-        expect(text()).not.toMatch(/Fly |Be at|TARGET|PROJECTED|MEASURED|to spare/);
+        expect(cellText('DESCENT')).toMatch(/^[\d,]+ fpm now —$/);
+        expect(cellText('GLIDE PATH')).toMatch(/^\+[\d,]+ ft$/);
+        expect(text()).not.toMatch(/Fly |Be at|TARGET|PROJECTED|MEASURED|to spare|FINAL POINT/);
         expect(text()).toContain('Glide: 250/14 at 6,000 ft · FIS-B');
         expect(text()).not.toContain('Runway:');      // no METAR -> no runway part
-        // map: line aircraft -> final point, ring at the point, dashed final to the RWY 24 threshold
+        // map: line aircraft -> the nearest point of the runway and a ring at it (no dashed final any more)
         const shapes = mapShapes();
-        expect(shapes.map((s) => s.type).sort()).toEqual(['polyline', 'polyline', 'ring']);
+        expect(shapes.map((s) => s.type).sort()).toEqual(['polyline', 'ring']);
         expect(shapes.every((s) => s.opts.interactive === false)).toBe(true);
-        const dashed = shapes.find((s) => s.opts.dashArray);
-        expect(dashed.latlngs[1][0]).toBeCloseTo(KLKR_RWY.recip_thr_lat, 6);
-        expect(dashed.latlngs[1][1]).toBeCloseTo(KLKR_RWY.recip_thr_lon, 6);
-        const leg = shapes.find((s) => s.type === 'polyline' && !s.opts.dashArray);
+        expect(shapes.some((s) => s.opts.dashArray)).toBe(false);
+        const leg = shapes.find((s) => s.type === 'polyline');
         expect(leg.latlngs[0]).toEqual([sit.lat, sit.lon]);
+        const pt = GlideModel.fromLocal(KLKR.lat, KLKR.lon, plan.pt);
+        expect(leg.latlngs[1]).toEqual([pt.lat, pt.lon]);
+        expect(shapes.find((s) => s.type === 'ring').latlngs).toEqual([pt.lat, pt.lon]);
     });
 
-    it('FINAL POINT OUT OF REACH: plan B to the runway is reachable', () => {
+    it('GLIDE OK with a few hundred ft (golden case A, formerly "FINAL POINT OUT OF REACH")', () => {
         sit = situation(0, 5, 4500, 160);              // golden case A: 5 nm north, 4,500 ft
         panel = new GlidePanel(host, KLKR);
         panel.start();
-        expect(block().classList.contains('glide-caution')).toBe(true);
-        expect(text()).toMatch(/^⚠ FINAL POINT OUT OF REACH · \d{3} ft high/);
-        expect(host.querySelector('.glide-sub')).toBeNull();
+        expect(block().classList.contains('glide-ok')).toBe(true);
+        expect(text()).toMatch(/^✓ GLIDE OK · \d{3} ft high/);
         expect(cellText('TO')).toBe('RWY 06/24 nearest part');
         expect(cellText('GLIDE PATH')).toMatch(/^\+\d{3} ft$/);
-        expect(mapShapes().find((s) => s.opts.dashArray).latlngs).toEqual([]);   // no final, no threshold
+        expect(text()).not.toContain('⚠');
+    });
+
+    it('on final: lined up within 1 nm -> GLIDE OK, TO "RWY 06 on final", line to the 06 runway end', () => {
+        sit = onFinal06(0.6, 900);
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        const plan = panel.render(NOW);
+        expect(plan.kind).toBe('final');
+        expect(plan.needMsl).toBe(459.7);               // the 06 end's elevation
+        expect(block().classList.contains('glide-ok')).toBe(true);
+        expect(text()).toMatch(/^✓ GLIDE OK · \d{3} ft high/);
+        expect(cellText('TO')).toBe('RWY 06 on final');
+        expect(cellText('HEADING')).toMatch(/↑ on course$/);
+        expect(cellText('DISTANCE')).toBe('0.6 nm');
+        const leg = mapShapes().find((s) => s.type === 'polyline');
+        expect(leg.latlngs[1][0]).toBeCloseTo(KLKR_RWY.base_lat, 9);
+        expect(leg.latlngs[1][1]).toBeCloseTo(KLKR_RWY.base_lon, 9);
+        // too low on final: red CANNOT REACH, still "on final"
+        sit = onFinal06(0.9, 480);
+        panel.render(NOW);
+        expect(block().classList.contains('glide-danger')).toBe(true);
+        expect(text()).toMatch(/^✗ CANNOT REACH KLKR · \d{1,3} ft low/);
+        expect(cellText('TO')).toBe('RWY 06 on final');
+    });
+
+    it('crossing the runway at right angles 400 ft up: a turn back, TO note "turn back", not "nearest part"', () => {
+        sit = overRwy(0.5, 486 + 400, 149);
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        const plan = panel.render(NOW);
+        expect(plan.kind).toBe('direct');
+        expect(plan.turnBack).toBe(true);
+        expect(cellText('TO')).toBe('RWY 06/24 turn back');
+        // an ordinary approach from outside keeps "nearest part"
+        sit = situation(180, 6, 5500, 360);
+        expect(panel.render(NOW).turnBack).toBe(false);
+        expect(cellText('TO')).toBe('RWY 06/24 nearest part');
+    });
+
+    it('low over the runway: "✓ OVER RWY 06/24", green, no grid, no map line', () => {
+        sit = overRwy(0.5, 490, 59);
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        expect(panel.render(NOW).kind).toBe('over');
+        expect(block().classList.contains('glide-ok')).toBe(true);
+        expect(host.querySelector('.glide-verdict').textContent).toBe('✓ OVER RWY 06/24');
+        expect(host.querySelector('.glide-grid')).toBeNull();
+        expect(host.querySelectorAll('.glide-lbl')).toHaveLength(0);
+        expect(text()).not.toMatch(/low|high|turn/);
+        expect(map.layers.size).toBe(0);
+        // the wind line stays
+        expect(text()).toContain('Glide: 250/14 at 6,000 ft · FIS-B');
+        // from a line on the map to over the runway: the line goes
+        sit = situation(180, 6, 5500, 360);
+        panel.render(NOW);
+        expect(map.layers.size).toBe(1);
+        sit = overRwy(0.7, 480, 239);
+        panel.render(NOW);
+        expect(map.layers.size).toBe(0);
+        expect(host.querySelector('.glide-verdict').textContent).toBe('✓ OVER RWY 06/24');
+    });
+
+    it('high pass lined up with the runway ahead: GLIDE OK, no turn, 0.0 nm; crossing it: the turn back to the mid-point', () => {
+        // 300 ft above the field near the 06 end, tracking 059: ~5,700 ft of runway ahead, the glide needs ~3,800
+        sit = overRwy(0.05, 486 + 300, 59, { ground_speed: 80 });
+        panel = new GlidePanel(host, KLKR);
+        panel.start();
+        let plan = panel.render(NOW);
+        expect(plan.kind).toBe('direct');
+        expect(plan.spare).toBeCloseTo(300 - 200, 6);
+        expect(text()).toMatch(/^✓ GLIDE OK · 100 ft high/);
+        expect(cellText('TO')).toBe('RWY 06/24 nearest part');
+        expect(cellText('HEADING')).toMatch(/↑ on course$/);
+        expect(cellText('DISTANCE')).toBe('0.0 nm');
+        // the same height crossing the runway at right angles: a turn back to the mid-point, never "+100"
+        sit = overRwy(0.3, 486 + 300, 149, { ground_speed: 80 });
+        plan = panel.render(NOW);
+        expect(plan.kind).toBe('direct');
+        expect(plan.legNm).toBeGreaterThan(0);
+        expect(Math.abs(plan.turnNow)).toBeGreaterThan(60);          // toward the mid-point, ~1,200 ft up the runway
+        expect(plan.spare).toBeLessThan(0);
+        expect(text()).toMatch(/^✗ CANNOT REACH KLKR/);
+        expect(cellText('HEADING')).toMatch(/turn (right|left) \d+°$/);
     });
 
     it('CANNOT REACH: plan B is out of reach too', () => {
@@ -312,41 +416,6 @@ describe('GlidePanel live behaviour', () => {
         expect(map.layers.size).toBe(1);
     });
 
-    it('hysteresis keeps plan B until a final point has 100 ft to spare', () => {
-        // 6 nm NE, track 225, wind 060/15: final point spare -40 / 60 / 159 ft at 3,900 / 4,000 / 4,100 ft
-        fisbWind = { ...fisbWind, dir: 60, spd: 15 };
-        const ac = (alt) => situation(45, 6, alt, 225);
-        const finalSpare = (alt) => {
-            const s = ac(alt);
-            const apt = GlideInputs.airport(KLKR, GlideInputs.settings());
-            const a = GlideInputs.aircraft(s, GlideInputs.settings(), { lat: KLKR.lat, lon: KLKR.lon }, NOW);
-            return GlideModel.plan({ airport: apt, ac: a, glideWind: { from: 60, kt: 15 }, runwayWind: { kind: 'none' },
-                preferDirect: false }, GlideInputs.settings());
-        };
-        expect(finalSpare(3900).kind).toBe('direct');
-        expect(finalSpare(4000).kind).toBe('final');
-        expect(finalSpare(4000).spare).toBeGreaterThanOrEqual(0);
-        expect(finalSpare(4000).spare).toBeLessThan(100);
-        expect(finalSpare(4100).spare).toBeGreaterThanOrEqual(100);
-
-        sit = ac(3900);
-        panel = new GlidePanel(host, KLKR);
-        panel.start();
-        expect(text()).toMatch(/^⚠ FINAL POINT OUT OF REACH/);
-        sit = ac(4000);                                   // final point 60 ft spare: not enough to take over
-        panel.render(NOW);
-        expect(text()).toMatch(/^⚠ FINAL POINT OUT OF REACH/);
-        sit = ac(4100);                                   // 159 ft: the final point takes over
-        panel.render(NOW);
-        expect(text()).toMatch(/^✓ GLIDE OK · 15\d ft high/);
-        sit = ac(4000);                                   // back to 60 ft: stays on the final point
-        panel.render(NOW);
-        expect(text()).toMatch(/^✓ GLIDE OK · [56]\d ft high/);
-        // a restart forgets the hysteresis
-        panel.start();
-        expect(text()).toMatch(/^✓ GLIDE OK/);
-    });
-
     it('magnetic heading uses MagVar (magnetic = true - declination, 360 not 000)', () => {
         sit = situation(180, 6, 5500, 360);
         const calls = [];
@@ -374,17 +443,19 @@ describe('GlidePanel live behaviour', () => {
 
     it('turn cue: right / left / on course from turnNow and onCourseDeg', () => {
         panel = new GlidePanel(host, KLKR);
-        sit = situation(180, 6, 5500, 5);                  // tracking at the point
+        sit = situation(180, 6, 5500, 0);
         panel.start();
         const cue = () => host.querySelector('.glide-turn').textContent;
+        const toPoint = (panel.render(NOW).turnNow + 360) % 360;   // the track straight at the point
+        sit = situation(180, 6, 5500, toPoint + 2);
         let plan = panel.render(NOW);
         expect(Math.abs(plan.turnNow)).toBeLessThanOrEqual(GlideModel.DEFAULTS.pilot.onCourseDeg);
         expect(cue()).toBe('↑ on course');
-        sit = situation(180, 6, 5500, 300);                // track west of the point: turn right
+        sit = situation(180, 6, 5500, toPoint - 60);       // track left of the point: turn right
         plan = panel.render(NOW);
         expect(plan.turnNow).toBeGreaterThan(5);
         expect(cue()).toBe(`↱ turn right ${Math.round(plan.turnNow)}°`);
-        sit = situation(180, 6, 5500, 60);                 // track east of the point: turn left
+        sit = situation(180, 6, 5500, toPoint + 60);       // track right of the point: turn left
         plan = panel.render(NOW);
         expect(plan.turnNow).toBeLessThan(-5);
         expect(cue()).toBe(`↰ turn left ${Math.round(-plan.turnNow)}°`);
@@ -492,10 +563,10 @@ describe('GlidePanel live behaviour', () => {
             const S = GlideInputs.settings(), ref = { lat: KLKR.lat, lon: KLKR.lon };
             const want = GlideModel.plan({
                 airport: GlideInputs.airport(KLKR, S), ac: GlideInputs.aircraft(sit, S, ref, Date.now()),
-                glideWind: { from: 250, kt: 14 }, runwayWind: { kind: 'none' }, preferDirect: false,
+                glideWind: { from: 250, kt: 14 }, runwayWind: { kind: 'none' },
             }, S);
             expect(plan.spare).toBeCloseTo(want.spare, 6);
-            expect(text()).toContain(`✓ GLIDE OK · ${Math.floor(want.spare)} ft high`);
+            expect(text()).toContain(`✓ GLIDE OK · ${Math.floor(want.spare).toLocaleString('en-US')} ft high`);
         });
 
         it('only GDL 90 situations arriving: no block ("no GPS altitude from the Stratux")', () => {
@@ -531,7 +602,7 @@ describe('GlidePanel live behaviour', () => {
         warn.mockRestore();
     });
 
-    it('wind line: runway METAR + glide wind; amber no-wind and tailwind texts', async () => {
+    it('wind line: runway METAR + the glide wind source; amber only when the 10 kt headwind is assumed; tailwind on final', async () => {
         fisbMetar = {
             raw: 'KLKR 311742Z 24012G18KT 10SM CLR 18/05 A3001',
             decoded: { observed_at: new Date(NOW - 18 * 60000).toISOString(), wind_dir: 240, wind_speed: 12, wind_gust: 18 },
@@ -541,28 +612,70 @@ describe('GlidePanel live behaviour', () => {
         panel = new GlidePanel(host, KLKR);
         panel.start();
         await vi.advanceTimersByTimeAsync(0);              // runwayWind() resolved -> re-rendered
-        expect(text()).toContain('Runway: METAR KLKR 240/12G18 (18 min) · Glide: 250/14 at 6,000 ft · FIS-B');
+        // 5,014 ft above the field: winds aloft above 1,000 ft, the METAR below (Dana 2026-11-06)
+        expect(text()).toContain('Runway: METAR KLKR 240/12G18 (18 min) · Glide: 250/14 at 6,000 ft · FIS-B above 1,000 ft · METAR KLKR 240/12G18 (18 min) below');
         expect(host.querySelector('.glide-wind .glide-amber')).toBeNull();
+        const S = GlideInputs.settings(), ref = { lat: KLKR.lat, lon: KLKR.lon };
+        const surf = { from: 240, kt: 12, gustKt: 18, noTail: true };
+        const h = 5500 - KLKR.elev_ft, wUp = (h - 1000) / ((h - 1000) + (1000 - 200));   // weights over the height glided
+        const want = (gw) => GlideModel.plan({ airport: GlideInputs.airport(KLKR, S), ac: { ...GlideInputs.aircraft(sit, S, ref, NOW), vs: null },
+            glideWind: gw, runwayWind: { kind: 'metar', from: 240, kt: 12, gustKt: 18 } }, S).spare;
+        let plan = panel.render(NOW);
+        expect(plan.spare).toBeCloseTo(want({ layers: [{ wind: { from: 250, kt: 14 }, w: wUp }, { wind: surf, w: 1 - wUp }] }), 6);
 
-        // no winds aloft at all: the amber assumed-headwind text
+        // no winds aloft: the assumed 10 kt above 1,000 ft (only that part amber), the METAR below
         fisbWind = null;
-        panel.render(NOW);
-        const amber = host.querySelector('.glide-wind .glide-amber');
-        expect(amber.textContent).toBe('Glide: NO CURRENT WINDS ALOFT · 10 kt headwind assumed');
+        plan = panel.render(NOW);
+        expect(text()).toContain('Runway: METAR KLKR 240/12G18 (18 min) · Glide: assumed 10 kt headwind above 1,000 ft · METAR KLKR 240/12G18 (18 min) below');
+        expect([...host.querySelectorAll('.glide-wind .glide-amber')].map((e) => e.textContent)).toEqual(['assumed 10 kt headwind above 1,000 ft']);
+        expect(plan.spare).toBeCloseTo(want({ layers: [{ wind: null, w: wUp }, { wind: surf, w: 1 - wUp }] }), 6);
 
-        // only RWY 06 known, METAR wind straight down it from behind: amber tailwind text
+        // below 1,000 ft above the field: the METAR alone, named once
+        sit = situation(180, 2, 1200, 360);
+        plan = panel.render(NOW);
+        expect(text()).toContain('Wind: METAR KLKR 240/12G18 (18 min) · runway and glide');
+        expect(text()).not.toContain('Runway:');
+        expect(text()).not.toContain('Glide:');
+        expect(host.querySelector('.glide-wind .glide-amber')).toBeNull();
+        expect(plan.spare).toBeCloseTo(want(surf), 6);
+
+        // a VRB METAR below 1,000 ft: a headwind of its speed
         panel.stop();
-        const only06 = { ...KLKR_RWY };
-        for (const k of ['recip_lat', 'recip_lon', 'recip_thr_lat', 'recip_thr_lon']) delete only06[k];
-        fisbMetar = { ...fisbMetar, decoded: { ...fisbMetar.decoded, wind_dir: 239, wind_speed: 10, wind_gust: null } };
-        fisbWind = { dir: 239, spd: 10, alt: 6000, lat: KLKR.lat, lon: KLKR.lon, station: 'CLT', received_at: NOW - 60000 };
-        sit = situation(239, 6, 5500, 59);                 // 6 nm SW, lined up for 06
-        panel = new GlidePanel(host, { ...KLKR, runways: [only06] });
+        fisbMetar = { ...fisbMetar, raw: 'KLKR 311742Z VRB04KT', decoded: { ...fisbMetar.decoded, wind_dir: null, wind_speed: 4, wind_gust: null } };
         panel.start();
         await vi.advanceTimersByTimeAsync(0);
+        plan = panel.render(NOW);
+        expect(text()).toContain('Wind: METAR KLKR VRB/04 (18 min) · runway and glide');
+        expect(host.querySelector('.glide-wind .glide-amber')).toBeNull();
+        expect(plan.spare).toBeCloseTo(GlideModel.plan({ airport: GlideInputs.airport(KLKR, S),
+            ac: { ...GlideInputs.aircraft(sit, S, ref, NOW), vs: null }, glideWind: { headKt: 4 },
+            runwayWind: { kind: 'vrb', kt: 4, gustKt: null } }, S).spare, 6);
+
+        // no METAR and no winds aloft: the amber assumed-headwind text
+        panel.stop();
+        fisbMetar = null;
+        panel.start();
+        await vi.advanceTimersByTimeAsync(0);
+        const amber = host.querySelectorAll('.glide-wind .glide-amber');
+        expect([...amber].map((e) => e.textContent)).toEqual(['Glide: NO CURRENT WINDS ALOFT · 10 kt headwind assumed']);
+        expect(text()).not.toContain('Runway:');
+
+        // on final to RWY 06 with the METAR wind straight down it from behind: amber tailwind text
+        panel.stop();
+        fisbMetar = { raw: 'KLKR 311742Z 23910KT', received_at: NOW - 60000,
+            decoded: { observed_at: new Date(NOW - 5 * 60000).toISOString(), wind_dir: 239, wind_speed: 10, wind_gust: null } };
+        sit = onFinal06(0.8, 1000);
+        panel.start();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(panel.render(NOW).kind).toBe('final');
         expect(text()).toMatch(/^✓ GLIDE OK/);
         const tw = [...host.querySelectorAll('.glide-wind .glide-amber')].map((e) => e.textContent);
-        expect(tw).toContain('RWY 06: 10 kt TAILWIND');
+        expect(tw).toEqual(['RWY 06: 10 kt TAILWIND']);    // the glide part (the METAR, surface) is not amber
+        expect(text()).toContain('Wind: METAR KLKR 239/10 (5 min) · runway and glide');
+        // the same tailwind when not on final: no tailwind line
+        sit = situation(180, 6, 5500, 360);
+        expect(panel.render(NOW).kind).toBe('direct');
+        expect(text()).not.toContain('TAILWIND');
     });
 
     it('stop() clears the timer and the map layers', async () => {
@@ -727,8 +840,8 @@ describe('GlidePanel status line while ENGINE OUT is on and no glide numbers can
         vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
         expect(status()).toBeNull();
         expect(block()).not.toBeNull();
-        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft high/);
-        expect(mapShapes().map((s) => s.type).sort()).toEqual(['polyline', 'polyline', 'ring']);
+        expect(text()).toMatch(/^✓ GLIDE OK · [\d,]+ ft high/);
+        expect(mapShapes().map((s) => s.type).sort()).toEqual(['polyline', 'ring']);
 
         sit = { ...sit, gps_fix_quality: 0, timestamp: Date.now() + GlidePanel.UPDATE_MS };
         vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
@@ -798,7 +911,7 @@ describe('GlidePanel without showStatus (panel opened with ENGINE OUT already on
         vi.advanceTimersByTime(GlidePanel.UPDATE_MS);
         expect(block()).not.toBeNull();
         expect(host.hidden).toBe(false);
-        expect(text()).toMatch(/^✓ GLIDE OK · \d{1,3} ft high/);
+        expect(text()).toMatch(/^✓ GLIDE OK · [\d,]+ ft high/);
         expect(map.layers.size).toBe(1);
 
         vi.advanceTimersByTime(GlideInputs.SIT_MAX_AGE_MS + GlidePanel.UPDATE_MS);   // nothing new: stale
