@@ -217,8 +217,9 @@ class EmergencyGlide {
      * Rank airports by emergency landing suitability.
      * Scoring: runway length (40 pts), paved surface (20 pts),
      *          wind alignment (15 pts), terrain clearance (15 pts), proximity (10 pts).
-     * Reachable: the shared glide model's plan has spare >= 0 (any kind: final point, runway, reference
-     * point) AND the direct path clears the terrain by 500 ft. `glide` = { S, glideWind, acFor(refLatLon) }.
+     * Reachable: the shared glide model's plan has spare >= 0 (any kind: over the runway, short final, the
+     * nearest part of the runway, reference point) AND the direct path clears the terrain by 500 ft.
+     * `glide` = { S, glideWind, acFor(refLatLon) }.
      */
     _rankAirports(airports, lat, lon, altAgl, sit, glide) {
         return airports
@@ -275,7 +276,8 @@ class EmergencyGlide {
     /**
      * The shared model's plan to one NASR airport record, or null when it cannot be computed (heliport /
      * seaplane base, no elevation or position, no aircraft state, or a non-finite result) - the airport
-     * is then not reachable. No runway wind: the model takes its end choice / final headwind from the glide wind.
+     * is then not reachable. No runway wind (no per-airport METAR here): the glide legs use the winds aloft or
+     * the assumed headwind (spec 2026-11-06 decision 2), and a short final's headwind comes from the same wind.
      */
     _planFor(rec, glide) {
         try {
@@ -284,7 +286,7 @@ class EmergencyGlide {
             const ac = glide.acFor(apt.refLatLon);
             if (!ac) return null;
             const plan = GlideModel.plan({
-                airport: apt, ac, glideWind: glide.glideWind, runwayWind: { kind: 'none' }, preferDirect: false,
+                airport: apt, ac, glideWind: glide.glideWind, runwayWind: { kind: 'none' },
             }, glide.S);
             const nums = [plan.spare, plan.target, plan.needMsl, plan.legNm, plan.tMin, plan.hdgTrue];
             return nums.every(Number.isFinite) ? plan : null;
@@ -918,4 +920,4 @@ EmergencyGlide.KT_TO_FPM = 101.269;          // 1 kt in feet per minute
 EmergencyGlide.GEOID_ALLOWANCE_FT = 350;     // GDL 90 altitude is ellipsoid height; max geoid separation is about 107 m
 EmergencyGlide.SEARCH_RADIUS_FACTOR = 1.1;   // query 10% beyond the farthest point the model could reach
 EmergencyGlide.BELOW_SEA_LEVEL_FT = 300;     // fields below sea level (lowest US public field is about -210 ft)
-EmergencyGlide.RUNWAY_ALLOWANCE_NM = 2;      // the runway's nearest part / final point can lie beyond the reference point
+EmergencyGlide.RUNWAY_ALLOWANCE_NM = 2;      // the runway's nearest part / short-final runway end can lie beyond the reference point
