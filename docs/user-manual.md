@@ -692,7 +692,7 @@ The bands are deliberately blocky. The forecast samples about every 750 ft low d
 
 A solid red line marks the 0°C freezing level, which moves along the route.
 
-**Cloud data is fetched on the ground and does not update in flight.** It refreshes automatically whenever you edit the route while connected at home or on the internet. The WX chip in the profile header shows how old the forecast is — grey when recent, amber past three hours, red past six. Old data is still drawn; the chip tells you how much to trust it. If the chip reads "no data for ETA" — shown in amber — the cached forecast does not reach far enough forward in time to cover your arrival and nothing is drawn.
+**Cloud data is fetched on the ground and does not update in flight.** It refreshes automatically whenever you edit the route while connected at home or on the internet. The forecast is NOAA's RRFS model (3 km), or GFS where RRFS has no data (outside the US, or if RRFS is unavailable); the WX chip in the profile header names it and shows how old the forecast is (e.g. *WX RRFS 12m ago*) — grey when recent, amber past three hours, red past six. Old data is still drawn; the chip tells you how much to trust it. If the chip reads "no data for ETA" — shown in amber — the cached forecast does not reach far enough forward in time to cover your arrival and nothing is drawn.
 
 If the route has no computed timing yet, the chip adds "valid now" and the whole chart is drawn for the current hour rather than for your ETA at each point. It is all or nothing: you never get a chart that mixes the two.
 

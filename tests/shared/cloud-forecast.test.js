@@ -1,5 +1,5 @@
 // tests/shared/cloud-forecast.test.js
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 
 // cloud-forecast.js is a classic script (no import/export). Load it in a
@@ -424,5 +424,67 @@ describe('cloudMergeContours', () => {
         }
         const bknOvcCells = r.cells.filter(c => c.cover === 'BKN' || c.cover === 'OVC');
         expect(r.contours.length).toBeLessThanOrEqual(bknOvcCells.length);
+    });
+});
+
+// ── Model: RRFS first, GFS fallback (2026-11-08) ─────────────────────────────
+// Open-Meteo drops HRRR (and gfs_hrrr's HRRR part) at the end of November 2026
+// and points to RRFS. RRFS covers CONUS only, so GFS is the fallback.
+describe('cloud model: RRFS (ncep_rrfs_conus) first, GFS (gfs_seamless) when RRFS fails or has no cloud data', () => {
+    const allNull = (json) => (Array.isArray(json) ? json : [json]).map((loc) => ({ ...loc,
+        hourly: Object.fromEntries(Object.entries(loc.hourly).map(([k, v]) => [k, k === 'time' ? v : v.map(() => null)])) }));
+    const store = () => { const s = new CloudForecastStore(); s._save = async (r) => { s._data = r; }; return s; };
+    let calls;
+    const answer = (byModel) => { calls = []; globalThis.fetch = async (url) => {
+        const m = new URL(url).searchParams.get('models'); calls.push(m);
+        const v = byModel[m];
+        if (v === undefined) throw new TypeError('Failed to fetch');
+        if (typeof v === 'number') return { ok: false, status: v, statusText: 'x', json: async () => ({ error: true }) };
+        return { ok: true, status: 200, json: async () => v };
+    }; };
+    afterEach(() => { delete globalThis.fetch; });
+
+    it('asks for RRFS by default; never gfs_hrrr', () => {
+        expect(new URL(cloudBuildUrl(FIX_POINTS)).searchParams.get('models')).toBe('ncep_rrfs_conus');
+        expect(cloudBuildUrl(FIX_POINTS)).not.toContain('hrrr');
+        expect(new URL(cloudBuildUrl(FIX_POINTS, 'gfs_seamless')).searchParams.get('models')).toBe('gfs_seamless');
+    });
+
+    it('RRFS answers: one request, the record says RRFS', async () => {
+        answer({ ncep_rrfs_conus: FIXTURE });
+        const rec = await store().fetchAndStore(FIX_POINTS);
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+        expect(rec.model).toBe('RRFS');
+    });
+
+    it('RRFS refuses (e.g. 400 outside its grid): GFS, and the record says GFS', async () => {
+        answer({ ncep_rrfs_conus: 400, gfs_seamless: FIXTURE });
+        const rec = await store().fetchAndStore(FIX_POINTS);
+        expect(calls).toEqual(['ncep_rrfs_conus', 'gfs_seamless']);
+        expect(rec.model).toBe('GFS');
+    });
+
+    it('RRFS answers with no cloud values at all (all null): GFS', async () => {
+        answer({ ncep_rrfs_conus: allNull(FIXTURE), gfs_seamless: FIXTURE });
+        expect((await store().fetchAndStore(FIX_POINTS)).model).toBe('GFS');
+    });
+
+    it('offline: throws (the caller keeps the old cache), and does not try GFS after a network failure', async () => {
+        answer({});
+        await expect(store().fetchAndStore(FIX_POINTS)).rejects.toThrow();
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+    });
+
+    it('both refuse: throws', async () => {
+        answer({ ncep_rrfs_conus: 500, gfs_seamless: 502 });
+        await expect(store().fetchAndStore(FIX_POINTS)).rejects.toThrow();
+    });
+
+    it('the result carries the model for the WX chip; a record from before this change has none', () => {
+        const rec = { ...cloudNormalize(FIXTURE, FIX_POINTS), model: 'RRFS' };
+        const eta = Date.parse(`${rec.times[3]}Z`) + 60000;
+        expect(cloudBuildResult(rec, [eta, eta], Date.parse(rec.fetchedAt)).model).toBe('RRFS');
+        const old = cloudNormalize(FIXTURE, FIX_POINTS); delete old.model;
+        expect(cloudBuildResult(old, [eta, eta], Date.parse(old.fetchedAt)).model).toBeNull();
     });
 });

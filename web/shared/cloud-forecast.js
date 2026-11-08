@@ -1,6 +1,6 @@
 /**
  * FlyTab — Cloud Forecast Store
- * Pressure-level cloud cover + freezing level from Open-Meteo, cached in IDB
+ * Pressure-level cloud cover + freezing level from Open-Meteo (RRFS, GFS fallback), cached in IDB
  * for offline use in flight. Ground-fetch only; the profile reads cache only.
  *
  * See docs/superpowers/specs/2026-08-04-route-cloud-display-design.md
@@ -77,6 +77,16 @@ const CLOUD_M_TO_FT   = 3.28084;
 const CLOUD_DB_NAME   = 'flytab_cloud_forecast';
 const CLOUD_STORE     = 'forecast';
 const CLOUD_API_BASE  = 'https://api.open-meteo.com/v1/forecast';
+/**
+ * Models tried in order (2026-11-08). NOAA's RRFS replaced NAM/HREF on 2026-11-03 and Open-Meteo
+ * drops HRRR (so gfs_hrrr's HRRR part) at the end of November 2026, pointing to RRFS. RRFS covers
+ * CONUS only (~3.5 days): GFS when RRFS refuses or has no cloud values. Checked live 2026-11-08:
+ * ncep_rrfs_conus returns every level and the freezing level for all 48 hours, no nulls.
+ */
+const CLOUD_MODELS = [
+    { id: 'ncep_rrfs_conus', label: 'RRFS' },
+    { id: 'gfs_seamless',    label: 'GFS' },
+];
 
 /**
  * Build the Open-Meteo request for a whole route in one call.
@@ -87,7 +97,7 @@ const CLOUD_API_BASE  = 'https://api.open-meteo.com/v1/forecast';
  * ecmwf_ifs025, gfs_graphcast025). Vertical structure comes from the
  * per-level cloud_cover_<L>hPa + geopotential_height_<L>hPa pairs below.
  */
-function cloudBuildUrl(points) {
+function cloudBuildUrl(points, model = CLOUD_MODELS[0].id) {
     const fields = ['freezing_level_height'];
     for (const L of CLOUD_LEVELS_HPA) {
         fields.push(`cloud_cover_${L}hPa`, `geopotential_height_${L}hPa`);
@@ -102,13 +112,19 @@ function cloudBuildUrl(points) {
         hourly:       fields.join(','),
         forecast_days: '2',
         timezone:     'UTC',
-        models:       'gfs_hrrr',
+        models:       model,
     });
     return `${CLOUD_API_BASE}?latitude=${lat}&longitude=${lon}&${qs.toString()}`;
 }
 
+/** Any cloud cover value at all in an answer (a model past its range or area answers all null). */
+function cloudHasData(json) {
+    const series = Array.isArray(json) ? json : [json];
+    return series.some((s) => CLOUD_LEVELS_HPA.some((L) => (s?.hourly?.[`cloud_cover_${L}hPa`] || []).some((v) => v != null)));
+}
+
 /** Open-Meteo returns a bare object for one point, an array for many. */
-function cloudNormalize(json, points) {
+function cloudNormalize(json, points, model = null) {
     const series = Array.isArray(json) ? json : [json];
     const times  = series[0]?.hourly?.time ?? [];
 
@@ -140,6 +156,7 @@ function cloudNormalize(json, points) {
     return {
         routeHash: cloudRouteHash(points),
         fetchedAt: new Date().toISOString(),
+        model,                              // 'RRFS' | 'GFS' (null: a record from before 2026-11-08)
         points:    points.map(p => ({ lat: p.lat, lon: p.lon, distNm: p.distNm })),
         times,
         levels:    CLOUD_LEVELS_HPA.slice(),
@@ -243,8 +260,9 @@ function cloudBuildResult(record, etaMs, nowMs) {
     const ageMs     = Math.max(0, nowMs - Date.parse(record.fetchedAt));
     const staleness = cloudStaleness(ageMs);
     const ageLabel  = cloudAgeLabel(ageMs);
+    const model = record.model || null;
     const empty = {
-        staleness, covered: false, fetchedAt: record.fetchedAt, ageLabel,
+        staleness, covered: false, fetchedAt: record.fetchedAt, ageLabel, model,
         cells: [], contours: [], freezingLevel: [],
     };
 
@@ -306,7 +324,7 @@ function cloudBuildResult(record, etaMs, nowMs) {
 
     const contours = cloudMergeContours(contourByPoint);
 
-    return { staleness, covered: true, fetchedAt: record.fetchedAt, ageLabel,
+    return { staleness, covered: true, fetchedAt: record.fetchedAt, ageLabel, model,
              cells, contours, freezingLevel };
 }
 
@@ -352,16 +370,24 @@ class CloudForecastStore {
         });
     }
 
-    /** Ground use only. Throws on failure; the caller keeps the old cache. */
+    /**
+     * Ground use only. RRFS, else GFS when RRFS refuses or has no cloud values. Throws on failure
+     * (the caller keeps the old cache); a network failure is not retried with the next model.
+     */
     async fetchAndStore(points) {
-        const resp = await fetch(cloudBuildUrl(points), { signal: AbortSignal.timeout(30000) });
-        if (!resp.ok) throw new Error(`Cloud fetch failed: ${resp.status} ${resp.statusText}`);
-        const json = await resp.json();
-        const series = Array.isArray(json) ? json : [json];
-        if (!series[0]?.hourly?.time?.length) throw new Error('Cloud fetch returned no hourly data');
-        const record = cloudNormalize(json, points);
-        await this._save(record);
-        return record;
+        let lastErr = null;
+        for (const m of CLOUD_MODELS) {
+            const resp = await fetch(cloudBuildUrl(points, m.id), { signal: AbortSignal.timeout(30000) });
+            if (!resp.ok) { lastErr = new Error(`Cloud fetch failed (${m.label}): ${resp.status} ${resp.statusText}`); continue; }
+            const json = await resp.json();
+            const series = Array.isArray(json) ? json : [json];
+            if (!series[0]?.hourly?.time?.length) { lastErr = new Error(`Cloud fetch returned no hourly data (${m.label})`); continue; }
+            if (!cloudHasData(json)) { lastErr = new Error(`Cloud fetch: no cloud values (${m.label})`); continue; }
+            const record = cloudNormalize(json, points, m.label);
+            await this._save(record);
+            return record;
+        }
+        throw lastErr || new Error('Cloud fetch failed');
     }
 
     /** Cache-only read. Returns null when there is nothing usable. */

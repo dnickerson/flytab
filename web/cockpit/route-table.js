@@ -2965,6 +2965,7 @@ class RouteTable {
                         staleness: res.staleness,
                         covered:   res.covered,
                         ageLabel:  res.ageLabel,
+                        model:     res.model || null,   // 'RRFS' | 'GFS' (2026-11-08); null for an older cache
                         estimated: allEstimated,   // uniform now-hour fallback was used
                     };
                 }
