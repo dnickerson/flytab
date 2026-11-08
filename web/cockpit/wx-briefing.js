@@ -1393,11 +1393,15 @@ class WxBriefing {
         if (!coords.length) return null;
         const lats = coords.map(c => c.lat);
         const lons = coords.map(c => c.lon);
+        // AWC answers a bbox with 7+ decimals with HTTP 400 (the proxy makes it a 502
+        // with no CORS header: "Failed to fetch", no METARs or TAFs). Round outward to
+        // 4 decimals (~11 m) so the box only grows.
+        const down = (v) => Math.floor(v * 1e4) / 1e4, up = (v) => Math.ceil(v * 1e4) / 1e4;
         return {
-            s: Math.min(...lats) - bufferDeg,
-            n: Math.max(...lats) + bufferDeg,
-            w: Math.min(...lons) - bufferDeg,
-            e: Math.max(...lons) + bufferDeg,
+            s: down(Math.min(...lats) - bufferDeg),
+            n: up(Math.max(...lats) + bufferDeg),
+            w: down(Math.min(...lons) - bufferDeg),
+            e: up(Math.max(...lons) + bufferDeg),
         };
     }
 
@@ -1514,6 +1518,8 @@ class WxBriefing {
         const url = `${base}/weather?type=taf&bbox=${bbox.s},${bbox.w},${bbox.n},${bbox.e}&format=json`;
         const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!resp.ok) throw new Error(`TAF bbox failed: ${resp.status}`);
+        // 204, no body: no TAF airport in the box -- no TAFs, not a failure.
+        if (resp.status === 204) return {};
         const items = await resp.json();
         const out = {};
         for (const item of (Array.isArray(items) ? items : [])) {
