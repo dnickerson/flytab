@@ -340,7 +340,16 @@ describe('EnginePage FUEL STATUS — configured caution/warning thresholds', () 
     });
 });
 
-describe('EnginePage TIC vs EDM row — still compares against the EDM, not tank state', () => {
+describe('EnginePage TIC vs D-180 row — still compares against the D-180, not tank state', () => {
+    it('is labelled TIC vs D-180', () => {
+        setup({ tankL: 10, tankR: 8, measurement: { total_gal: 29.0 } });
+        fuelFields({ Fuel_Remaining: 30, fuel_flow: 0 });
+        const row = page._dom.ticEdmRow;
+        expect(row.querySelector('.ep-tic-edm-label').textContent).toBe('TIC vs D-180');
+        expect(row.textContent).toMatch(/D-180: 30\.0/);
+        expect(row.textContent).not.toMatch(/EDM/);
+    });
+
     it('shows the EDM totalizer figure in the EDM column', () => {
         // Tank state is 18.0; the EDM reports 30.0. The row exists to expose that
         // disagreement, so it must keep reading the EDM value.

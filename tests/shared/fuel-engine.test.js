@@ -146,4 +146,20 @@ describe('FuelEngine', () => {
             expect(FuelEngine.fuelForDistance(60, 120, 8)).toBeCloseTo(4, 5);
         });
     });
+
+    describe('extractEdmFuel (D-180 Fuel_Remaining only)', () => {
+        it('ignores the Pi tracker data.fuel.* and returns the D-180 field', () => {
+            expect(FuelEngine.extractEdmFuel({ fuel: { fuel_remaining: 30 }, Fuel_Remaining: 12.5 })).toBe(12.5);
+        });
+
+        it('returns 0 when only the Pi tracker figure is present', () => {
+            expect(FuelEngine.extractEdmFuel({ fuel: { fuel_remaining: 30 } })).toBe(0);
+        });
+
+        it('returns 0 for missing data or a non-numeric field', () => {
+            expect(FuelEngine.extractEdmFuel(null)).toBe(0);
+            expect(FuelEngine.extractEdmFuel({})).toBe(0);
+            expect(FuelEngine.extractEdmFuel({ Fuel_Remaining: '---' })).toBe(0);
+        });
+    });
 });

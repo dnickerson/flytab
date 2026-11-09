@@ -66,9 +66,9 @@ beforeEach(() => {
             return undefined;
         },
     };
-    // The flight-CSV EDM lookup (_resolveEdmFuel(), localhost:9090) stays offline —
-    // these guard tests don't exercise EDM resolution and rely on it resolving to
-    // null. Fuel is never written to the Pi, so nothing else is fetched.
+    // The overlay makes no network request; fetch is stubbed only so an accidental
+    // call cannot reach a real host. window.enginePanel is unset, so the D-180
+    // figure resolves to null.
     window.engineClient = { ip: '192.168.1.50' };
     realFetch = globalThis.fetch;
     globalThis.fetch = (url) => (typeof url === 'string' && url.includes('localhost:9090'))
@@ -131,8 +131,8 @@ function departWith(tic) {
     return tank();
 }
 
-/** Fill in the gallons-purchased field, tap RECORD FUEL STOP, and let its promise
- *  chain settle (_recordFuelStop() is async). */
+/** Fill in the gallons-purchased field and tap RECORD FUEL STOP. _recordFuelStop()
+ *  is synchronous; the short wait is harmless and keeps the helper uniform. */
 async function recordStop(gallons = 12) {
     overlay._dom.addGal.value = String(gallons);
     overlay._dom.addAirport.value = 'KMYL';
@@ -275,9 +275,10 @@ describe('fuel stop record — requires a reading entered this session', () => {
         expect(JSON.parse(localStorage.getItem('flytab_fuel_stops'))).toHaveLength(1);
     });
 
-    it('records once when two RECORD taps fire back-to-back (double-tap)', async () => {
-        // The second tap must not append a second flytab_fuel_stops entry: either the
-        // _recording latch or the consumed reading (_ticsTouchedSinceShow) refuses it.
+    it('consumed-reading guard: a back-to-back second RECORD tap records nothing', async () => {
+        // _recordFuelStop() is synchronous, so the second tap runs after the first
+        // has finished and cleared _ticsTouchedSinceShow; that consumed-reading guard
+        // is what refuses it (the _recording latch has no window to close).
         departWith(MAX_TIC);
         const d = open();
         drag(d.leftSlider, 6);
@@ -334,7 +335,7 @@ describe('preflight flow is unaffected', () => {
         open();
         expect(overlay._leftTic).toBe(8);              // restored, untouched
         tap('fo-apply');
-        await new Promise(r => setTimeout(r, 20));     // _resolveEdmFuel() is async
+        await new Promise(r => setTimeout(r, 20));     // harmless; APPLY is synchronous
 
         expect(tank().total).toBe(restored);
         expect(overlay.visible).toBe(false);           // APPLY closes the overlay
@@ -346,8 +347,8 @@ describe('structural contract with app.js', () => {
         // _recordFuelStop must consult the flag, not only the tic values: app.js's
         // Continue gate has no other way to tell a fresh reading from a restored one.
         const recordBody = FUEL_OVERLAY_SRC.slice(
-            FUEL_OVERLAY_SRC.indexOf('async _recordFuelStop()'),
-            FUEL_OVERLAY_SRC.indexOf('_engineBaseUrl()'));
+            FUEL_OVERLAY_SRC.indexOf('    _recordFuelStop() {'),
+            FUEL_OVERLAY_SRC.indexOf('    _droppedBurnMaxGal() {'));
         expect(recordBody).toMatch(/!this\._ticsTouchedSinceShow/);
         expect(recordBody).toMatch(/this\._leftTic === 0 && this\._rightTic === 0/);
 

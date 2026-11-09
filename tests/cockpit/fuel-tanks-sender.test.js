@@ -139,21 +139,22 @@ describe('_updateSenderDisplay — fuel-critical edge values', () => {
 });
 
 describe('_updateSenderDisplay — fallback total path (no per-tank senders)', () => {
-    // Field shape matters: FuelEngine.extractEdmFuel reads data.fuel.fuel_remaining /
-    // fuel_remaining_gal / fuel_gal / gallons_rem / Gallons_Rem / Fuel_Remaining.
-    // A bare `fuel_remaining` is NOT recognized.
+    // Field shape matters: FuelEngine.extractEdmFuel reads only the D-180's own
+    // data.Fuel_Remaining. The Pi tracker (data.fuel.fuel_remaining) and the old
+    // aliases (fuel_remaining_gal, Gallons_Rem, ...) are NOT read.
     it('suppresses the combined total when tanks are above the threshold', () => {
-        const out = senderText(17, 17, { fuel: { fuel_remaining: 33 }, fuel_flow_gph: 9 });
+        const out = senderText(17, 17, { Fuel_Remaining: 33, fuel_flow_gph: 9 });
         expect(out.L).toBe(SUPPRESSED);
     });
 
     it('shows the combined total when tanks are below the threshold', () => {
-        const out = senderText(8, 8, { fuel: { fuel_remaining: 16 }, fuel_flow_gph: 9 });
+        const out = senderText(8, 8, { Fuel_Remaining: 16, fuel_flow_gph: 9 });
         expect(out.L).toBe('s:16');
     });
 
-    it('accepts the flat fuel_remaining_gal variant', () => {
-        const out = senderText(8, 8, { fuel_remaining_gal: 15, fuel_flow_gph: 9 });
-        expect(out.L).toBe('s:15');
+    it('does not show the Pi tracker figure as a sender total', () => {
+        const before = senderText(8, 8, { fuel_flow_gph: 9 });
+        const out = senderText(8, 8, { fuel: { fuel_remaining: 16 }, fuel_remaining_gal: 15, fuel_flow_gph: 9 });
+        expect(out.L).toBe(before.L);
     });
 });

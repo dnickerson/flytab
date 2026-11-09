@@ -1,6 +1,6 @@
 /**
  * FlyTab — Fuel Overlay
- * Full-screen overlay for tic mark entry, EDM comparison, and fuel source management.
+ * Full-screen overlay for tic mark entry, tic vs tracked-fuel comparison, and fuel source management.
  * Same pattern as EnginePage: show/hide with buildDOM, reads from FuelEngine + FuelState.
  */
 
@@ -15,13 +15,12 @@ class FuelOverlay {
         this._maxTic = 17;
         this._ticStep = 0.5;
         this._coefficients = FuelEngine.DEFAULT_COEFFICIENTS;
-        this._cachedCsvEdmFuel = 0;
         this._shownAt = 0;
         this._applying = false;
-        // Re-entrancy guard for _recordFuelStop(), same rationale as _applying above:
-        // a second RECORD tap while the first is still running must be refused
-        // rather than racing past the guard-clearing side effects — otherwise a
-        // double tap can duplicate a fuel-stop entry.
+        // Re-entrancy latch for _recordFuelStop(). That method is synchronous, so two
+        // taps cannot overlap today; the latch is kept as a defensive guard in case an
+        // await is ever reintroduced. A double tap is refused by the consumed-reading
+        // guard (_ticsTouchedSinceShow) instead.
         this._recording = false;
         // True once the pilot has moved a slider, typed in a tic field or tapped a
         // ± button since the current show(). show() restores the PREVIOUS
@@ -108,17 +107,17 @@ class FuelOverlay {
                 <div class="fo-add-status" id="fo-dropped-burn-status"></div>
             </div>
 
-            <!-- B) EDM COMPARISON -->
+            <!-- B) TIC vs TRACKED COMPARISON (tracked = tablet FuelTankState) -->
             <div class="fo-edm-section" id="fo-edm-section" style="display:none;">
-                <div class="fo-section-title">EDM COMPARISON</div>
+                <div class="fo-section-title">TIC vs TRACKED</div>
                 <div class="fo-edm-row">
                     <div class="fo-edm-item">
                         <div class="fo-edm-label">TIC</div>
                         <div class="fo-edm-val" id="fo-edm-tic">--</div>
                     </div>
                     <div class="fo-edm-item">
-                        <div class="fo-edm-label">EDM</div>
-                        <div class="fo-edm-val" id="fo-edm-edm">--</div>
+                        <div class="fo-edm-label">TRACKED</div>
+                        <div class="fo-edm-val" id="fo-edm-tracked">--</div>
                     </div>
                     <div class="fo-edm-item">
                         <div class="fo-edm-label">VARIANCE</div>
@@ -129,6 +128,7 @@ class FuelOverlay {
                         <div class="fo-edm-badge" id="fo-edm-grade">--</div>
                     </div>
                 </div>
+                <div class="fo-edm-d180" id="fo-edm-d180" style="display:none;"></div>
             </div>
 
             <!-- C) ACTIVE FUEL SOURCE -->
@@ -188,7 +188,7 @@ class FuelOverlay {
                         <tr>
                             <th>DATE / TIME</th>
                             <th>TIC (gal)</th>
-                            <th>EDM (gal)</th>
+                            <th>TRACKED (gal)</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -205,7 +205,7 @@ class FuelOverlay {
                         <div class="fo-kfactor-val" id="fo-kf-filled">-- gal</div>
                     </div>
                     <div class="fo-kfactor-item">
-                        <div class="fo-kfactor-label">FUEL USED (EDM)</div>
+                        <div class="fo-kfactor-label">FUEL USED (TRACKED)</div>
                         <div class="fo-kfactor-val" id="fo-kf-used">-- gal</div>
                     </div>
                     <div class="fo-kfactor-item">
@@ -215,27 +215,8 @@ class FuelOverlay {
                 </div>
                 <div class="fo-kfactor-guidance" id="fo-kf-guidance"></div>
                 <div class="fo-kfactor-note">
-                    Ratio = Filled ÷ Used (EDM). Multiply by current K-factor to correct fuel flow accuracy.
-                </div>
-            </div>
-
-            <!-- H) PI K-FACTOR (LIVE) -->
-            <div id="fo-kfactor-pi" style="display:none;">
-                <div class="fo-section-title">PI K-FACTOR (LIVE)</div>
-                <div class="fo-kfactor-panel">
-                    <div class="fo-kfactor-row">
-                        <div class="fo-kfactor-item">
-                            <div class="fo-kfactor-label">CURRENT (PI)</div>
-                            <div class="fo-kfactor-val" id="fo-kf-pi-current">--</div>
-                        </div>
-                        <div class="fo-kfactor-item">
-                            <div class="fo-kfactor-label">SUGGESTED (PI)</div>
-                            <div class="fo-kfactor-val" id="fo-kf-pi-suggested">--</div>
-                        </div>
-                    </div>
-                    <div class="fo-kfactor-guidance" id="fo-kf-pi-recommendation"></div>
-                    <button class="fo-manual-btn fo-set-btn" id="fo-kf-pi-apply" style="display:none;">APPLY TO PI</button>
-                    <div class="fo-add-status" id="fo-kf-pi-status"></div>
+                    Ratio = Filled ÷ Used (TRACKED). Tracked burn is integrated from the D-180 fuel-flow
+                    reading, so multiply the D-180's current K-factor by this ratio to correct its fuel flow.
                 </div>
             </div>
         </div>`;
@@ -258,7 +239,8 @@ class FuelOverlay {
             droppedBurnStatus: this._el.querySelector('#fo-dropped-burn-status'),
             edmSection: this._el.querySelector('#fo-edm-section'),
             edmTic: this._el.querySelector('#fo-edm-tic'),
-            edmEdm: this._el.querySelector('#fo-edm-edm'),
+            edmTracked: this._el.querySelector('#fo-edm-tracked'),
+            edmD180: this._el.querySelector('#fo-edm-d180'),
             edmVar: this._el.querySelector('#fo-edm-var'),
             edmGrade: this._el.querySelector('#fo-edm-grade'),
             sourceChain: this._el.querySelector('#fo-source-chain'),
@@ -280,12 +262,6 @@ class FuelOverlay {
             kfUsed:    this._el.querySelector('#fo-kf-used'),
             kfRatio:   this._el.querySelector('#fo-kf-ratio'),
             kfGuidance: this._el.querySelector('#fo-kf-guidance'),
-            kfPiSection: this._el.querySelector('#fo-kfactor-pi'),
-            kfPiCurrent: this._el.querySelector('#fo-kf-pi-current'),
-            kfPiSuggested: this._el.querySelector('#fo-kf-pi-suggested'),
-            kfPiRecommendation: this._el.querySelector('#fo-kf-pi-recommendation'),
-            kfPiApply: this._el.querySelector('#fo-kf-pi-apply'),
-            kfPiStatus: this._el.querySelector('#fo-kf-pi-status'),
         };
 
         // Wire close
@@ -384,11 +360,6 @@ class FuelOverlay {
         wireTap(this._el.querySelector('#fo-add-record'), () => {
             this._recordFuelStop();
         });
-
-        // Wire Pi K-factor apply button
-        wireTap(this._el.querySelector('#fo-kf-pi-apply'), () => {
-            this._applyPiKFactor();
-        });
     }
 
     /* ------------------------------------------------------------------
@@ -458,19 +429,9 @@ class FuelOverlay {
         this._updateSourceDisplay();
         this._renderHistory();
         this._renderKFactor();
-        this._fetchPiCalibration();
-        this._cachedCsvEdmFuel = 0;
         this._el.style.display = 'flex';
         this._visible = true;
         this._shownAt = Date.now();
-
-        // Pre-fetch last flight CSV EDM value for comparison display
-        this._resolveEdmFuel().then(val => {
-            if (val > 0) {
-                this._cachedCsvEdmFuel = val;
-                this._updateDisplay();
-            }
-        });
     }
 
     hide() {
@@ -495,8 +456,8 @@ class FuelOverlay {
         this._dom.rightGal.classList.toggle('fo-gal-implausible', rightGal > cap);
         this._dom.totalGal.textContent = total.toFixed(1);
 
-        // EDM comparison
-        this._updateEdmComparison(total);
+        // Tic vs tracked comparison
+        this._updateTrackedComparison();
     }
 
     /**
@@ -526,45 +487,63 @@ class FuelOverlay {
         } catch (_) { /* FuelTankState unavailable */ }
     }
 
-    _updateEdmComparison(ticTotal) {
-        let edmFuel = 0;
-        let isStale = false;
+    /**
+     * The tablet's tracked fuel on board: FuelTankState left + right, rounded to
+     * 0.1 gal like a measurement's total_gal. Null when nothing is tracked. A manual
+     * override is deliberately NOT used here: it is a pilot entry, not a measurement.
+     * `stale` reuses FuelState.getCurrentFuel()'s rule (FuelTankState.needsConfirmation()).
+     * @returns {{gal: number, stale: boolean}|null}
+     */
+    _trackedTotal() {
         try {
-            const panel = window.enginePanel;
-            // Freshness only controls the "(LAST)" label here — unlike _resolveEdmFuel()
-            // (a one-shot resolution used when confirming a fuel-state entry, which must
-            // stay strict), this is a passive preview and a momentarily-stale or
-            // post-disconnect panel reading is still better than substituting a CSV
-            // value from a different, earlier flight. Only fall through to the CSV
-            // cache when the panel has never reported anything this session.
-            const panelFresh = panel?.lastPollTime &&
-                (Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS;
-            if (panel?.lastData) {
-                edmFuel = FuelEngine.extractEdmFuel(panel.lastData);
-                isStale = !panelFresh;
-            }
-            // Fallback: cached value from last flight CSV (loaded on show()) — only
-            // when the panel has no reading at all.
-            if (!edmFuel && this._cachedCsvEdmFuel > 0) {
-                edmFuel = this._cachedCsvEdmFuel;
-                isStale = true;
-            }
-        } catch (_) { /* no engine data */ }
+            if (typeof FuelTankState === 'undefined') return null;
+            const st = FuelTankState.getState();
+            if (!st) return null;
+            const gal = Math.round((st.left_gal + st.right_gal) * 10) / 10;
+            if (!Number.isFinite(gal)) return null;
+            let stale = false;
+            try { stale = !!FuelTankState.needsConfirmation(); } catch (_) { stale = false; }
+            return { gal, stale };
+        } catch (_) { return null; }
+    }
 
-        if (edmFuel > 0) {
-            this._dom.edmSection.style.display = '';
-            const m = FuelEngine.createMeasurement(
-                this._leftTic, this._rightTic, this._coefficients, edmFuel
-            );
-            this._dom.edmTic.textContent = m.total_gal.toFixed(1) + ' gal';
-            this._dom.edmEdm.textContent = edmFuel.toFixed(1) + (isStale ? ' (LAST)' : '') + ' gal';
+    /**
+     * TIC | TRACKED | VARIANCE (TIC − TRACKED) | ACCURACY, plus a smaller
+     * "D-180: <x> gal" line when the D-180's own fuel figure is fresh. Hidden when
+     * there is no tracked tank state to compare with.
+     */
+    _updateTrackedComparison() {
+        const tracked = this._trackedTotal();
+        if (!tracked) {
+            this._dom.edmSection.style.display = 'none';
+            return;
+        }
+        this._dom.edmSection.style.display = '';
+        const m = FuelEngine.createMeasurement(
+            this._leftTic, this._rightTic, this._coefficients, tracked.gal
+        );
+        this._dom.edmTic.textContent = m.total_gal.toFixed(1) + ' gal';
+        this._dom.edmTracked.textContent = tracked.gal.toFixed(1) + ' gal' +
+            (tracked.stale ? ' (UNCONFIRMED)' : '');
+        if (m.variance_gal != null) {
             this._dom.edmVar.textContent = (m.variance_gal > 0 ? '+' : '') + m.variance_gal.toFixed(1) + ' gal';
-
             const grade = m.accuracy || 'check';
             this._dom.edmGrade.textContent = grade.toUpperCase();
             this._dom.edmGrade.className = 'fo-edm-badge fo-grade-' + grade;
         } else {
-            this._dom.edmSection.style.display = 'none';
+            // Tracked 0.0 gal: createMeasurement() grades only against a positive figure.
+            this._dom.edmVar.textContent = '--';
+            this._dom.edmGrade.textContent = '--';
+            this._dom.edmGrade.className = 'fo-edm-badge';
+        }
+
+        const d180 = this._resolveD180Fuel();
+        if (d180 != null) {
+            this._dom.edmD180.textContent = `D-180: ${d180.toFixed(1)} gal`;
+            this._dom.edmD180.style.display = '';
+        } else {
+            this._dom.edmD180.textContent = '';
+            this._dom.edmD180.style.display = 'none';
         }
     }
 
@@ -584,8 +563,8 @@ class FuelOverlay {
     /**
      * Returns an error message if either tank's CURRENT tic-derived gallons
      * exceeds capacity, else null. A single shared check so _applyMeasurement()
-     * and _recordFuelStop() can't drift apart, and so it can be re-run at write
-     * time (not just at tap time) — see _applyMeasurement()'s re-check comment.
+     * and _recordFuelStop() can't drift apart. Both run it immediately before
+     * their (synchronous) write, so it validates the value actually written.
      */
     _ticCapacityError() {
         const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
@@ -603,7 +582,8 @@ class FuelOverlay {
     _applyMeasurement() {
         // Guard against tap-through: ignore if overlay just opened (< 600ms ago)
         if (Date.now() - this._shownAt < 600) return;
-        // Guard against double-tap during the async EDM resolve (can take 3-5s)
+        // Re-entrancy latch. APPLY is synchronous (no network wait), so this is
+        // defensive: it refuses a re-entrant call made from inside the write path.
         if (this._applying) return;
 
         // Opened from the in-flight fuel-stop overlay: APPLY writes canonical
@@ -612,7 +592,7 @@ class FuelOverlay {
         // DEPARTURE reading into the tic fields, so tapping this button without touching
         // a control would report "Measured: <departure gallons>" over tanks that have
         // since burned down — the same defect as the record path, on the larger button.
-        // Refuse here, before the async resolve and before any write, so FuelState,
+        // Refuse here, before any write, so FuelState,
         // FuelTankState and initialized_at are all left byte-identical.
         // A reading that genuinely equals the restored one is confirmed the same way as
         // for RECORD: any ± nudge or slider touch sets the flag, so a + then − round trip
@@ -634,24 +614,10 @@ class FuelOverlay {
         }
 
         this._applying = true;
-
-        // Resolve EDM fuel async, then complete measurement
-        this._resolveEdmFuel().then(async edmFuel => {
-            // Re-check: the pilot can edit the tic reading during the async EDM
-            // resolve above (its own comment elsewhere notes this "can take
-            // 3-5s"), and nothing disables the sliders meanwhile. The guard above
-            // only validated the value at tap time — re-validate the CURRENT
-            // value here, right before it's written, so an implausible edit made
-            // mid-flight can't slip past the guard this re-check exists for
-            // (2026-09 audit finding).
-            const capErrorNow = this._ticCapacityError();
-            if (capErrorNow) {
-                this._setApplyStatus(`${capErrorNow} — check the tic reading before applying`, 'error');
-                return;
-            }
-            const m = FuelEngine.createMeasurement(
-                this._leftTic, this._rightTic, this._coefficients, edmFuel
-            );
+        try {
+            // Both figures are taken BEFORE FuelTankState.init() below overwrites the
+            // tracked state with this tic reading.
+            const m = this._createRecordedMeasurement();
             FuelState.saveMeasurement(m);
             if (typeof FuelTankState !== 'undefined') {
                 const existing = FuelTankState.getState();
@@ -665,62 +631,52 @@ class FuelOverlay {
             this._syncMeasurement(m);
             this._renderHistory();
             this.hide();
-        }).catch(err => console.error('[FuelOverlay] applyMeasurement failed:', err))
-          .finally(() => { this._applying = false; });
+        } catch (err) {
+            console.error('[FuelOverlay] applyMeasurement failed:', err);
+        } finally {
+            this._applying = false;
+        }
     }
 
     /**
-     * Resolve the best available EDM fuel remaining value.
-     * Priority: live engine panel → last row of most recent flight CSV.
-     * Returns null if no value is available.
+     * A measurement record for the current tic reading. tracked_gal is the tablet's
+     * tracked total (null when nothing is tracked) and must be read before the tic
+     * re-initialises FuelTankState; edm_gal is the D-180's own fuel figure when
+     * fresh, else null. variance_gal / variance_pct / accuracy grade the tic
+     * against tracked_gal, as the comparison block shows.
      */
-    async _resolveEdmFuel() {
-        // 1. Live engine panel (fresh within 10s)
+    _createRecordedMeasurement() {
+        const tracked = this._trackedTotal();
+        const m = FuelEngine.createMeasurement(
+            this._leftTic, this._rightTic, this._coefficients, tracked ? tracked.gal : null
+        );
+        m.tracked_gal = tracked ? tracked.gal : null;
+        m.edm_gal = this._resolveD180Fuel();
+        return m;
+    }
+
+    /**
+     * The Dynon D-180's own fuel-remaining figure (data.Fuel_Remaining) from a fresh
+     * engine panel (polled within FuelState.EDM_FRESHNESS_MS), else null. Synchronous:
+     * no file-server or CSV lookup, so APPLY TIC never waits on the network.
+     */
+    _resolveD180Fuel() {
         try {
             const panel = window.enginePanel;
-            if (panel && panel.lastData && panel.lastPollTime) {
-                if ((Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS) {
-                    const val = FuelEngine.extractEdmFuel(panel.lastData);
-                    if (val > 0) return val;
-                }
+            if (panel && panel.lastData && panel.lastPollTime &&
+                (Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS) {
+                const val = FuelEngine.extractEdmFuel(panel.lastData);
+                if (val > 0) return val;
             }
-        } catch (_) { /* */ }
-
-        // 2. Last row of the most recent flight CSV from internal storage
-        try {
-            const listResp = await fetch('http://localhost:9090/flights/list',
-                { signal: AbortSignal.timeout(3000) });
-            if (!listResp.ok) return null;
-            const files = await listResp.json();
-            // files is [{name, size_bytes, modified_ms}, ...] sorted newest-first
-            const flightFiles = files
-                .map(f => (typeof f === 'string' ? f : f.name))
-                .filter(name => /^\d{8}_/.test(name));
-            if (!flightFiles.length) return null;
-
-            const csvResp = await fetch(`http://localhost:9090/flights/${flightFiles[0]}`,
-                { signal: AbortSignal.timeout(5000) });
-            if (!csvResp.ok) return null;
-            const text = await csvResp.text();
-
-            // Find last non-empty data row (skip header)
-            const lines = text.trim().split('\n');
-            for (let i = lines.length - 1; i >= 1; i--) {
-                const cols = lines[i].split(',');
-                // Gallons Remaining is column index 9
-                const gal = parseFloat(cols[9]);
-                if (gal > 0) return gal;
-            }
-        } catch (_) { /* server unavailable or no flights */ }
-
+        } catch (_) { /* no engine data */ }
         return null;
     }
 
-    async _recordFuelStop() {
-        // Re-entrancy guard, same rationale as _applyMeasurement()'s _applying latch:
-        // the guard-clearing side effects (_ticsTouchedSinceShow, addGal/addPrice/
-        // addGalL/addGalR) run only after the work below, so a second RECORD tap
-        // must be refused rather than appending a duplicate flytab_fuel_stops entry.
+    _recordFuelStop() {
+        // Defensive re-entrancy latch (see the constructor). This method has no await,
+        // so a second RECORD tap runs only after the first has finished; that tap is
+        // refused by the consumed-reading guard (_ticsTouchedSinceShow, cleared below),
+        // not by this latch.
         if (this._recording) return;
 
         const gallons = parseFloat(this._dom.addGal.value);
@@ -776,13 +732,16 @@ class FuelOverlay {
             // Reset tracked fuel from the tic-mark reading already entered above (§A),
             // exactly like _applyMeasurement() does — a fuel stop is always grounded in
             // a fresh physical measurement, never computed from "previous + added."
+            // The measurement record (tracked_gal, edm_gal) is taken before init()
+            // re-initialises the tracked state. No flypi_fuel_history entry is written
+            // here; the K-factor skips history pairs that span a fuel stop.
+            const m = this._createRecordedMeasurement();
             const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
             const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
             const existingTank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
             if (typeof FuelTankState !== 'undefined') {
                 FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L');
             }
-            const m = FuelEngine.createMeasurement(this._leftTic, this._rightTic, this._coefficients);
             FuelState.saveMeasurement(m);
             const newTotal = m.total_gal;
 
@@ -806,10 +765,6 @@ class FuelOverlay {
         } finally {
             this._recording = false;
         }
-    }
-
-    _engineBaseUrl() {
-        return EngineClient.baseUrl();
     }
 
     /** Sane ceiling for a single dropped-burn correction: a full tank's worth,
@@ -867,14 +822,6 @@ class FuelOverlay {
 
     _setDroppedBurnStatus(msg, type) { this._setStatus(this._dom.droppedBurnStatus, msg, type); }
 
-    // The Pi POST in this file (/api/fuel/calibration/applied) must not set
-    // Content-Type. Setting it to application/json makes the request non-simple,
-    // so the WebView first sends a CORS preflight (OPTIONS) that engine_monitor.py
-    // has no handler for -- the preflight fails and the POST never goes out
-    // ("Failed to fetch"). Without the header fetch sends the CORS-safelisted
-    // text/plain, which the Pi's json.loads(body) parses fine. Same fix as
-    // _setAtis in engine-page.js.
-
     _setAddStatus(msg, type) { this._setStatus(this._dom.addStatus, msg, type); }
 
     _setApplyStatus(msg, type) { this._setStatus(this._dom.applyStatus, msg, type); }
@@ -917,14 +864,15 @@ class FuelOverlay {
             const dt = m.measured_at ? new Date(m.measured_at) : (m.ts ? new Date(m.ts) : null);
             const dateStr = dt ? this._fmtDate(dt) : '--';
             const tic = m.total_gal != null ? m.total_gal.toFixed(1) : '--';
-            const edm = m.edm_gal  != null ? m.edm_gal.toFixed(1)   : '--';
+            const ref = this._historyRefField(m);
+            const trk = Number.isFinite(m[ref]) ? m[ref].toFixed(1) : '--';
 
             const tr = document.createElement('tr');
             tr.dataset.origIdx = origIdx;
             tr.innerHTML = `
                 <td>${dateStr}</td>
                 <td>${tic}</td>
-                <td>${edm}</td>
+                <td>${trk}</td>
                 <td class="fo-hist-actions">
                     <button class="fo-hist-btn fo-hist-edit" title="Edit">✎</button>
                     <button class="fo-hist-btn fo-hist-del" title="Delete">✕</button>
@@ -955,7 +903,8 @@ class FuelOverlay {
         if (!m) return;
 
         const ticVal = m.total_gal != null ? m.total_gal.toFixed(1) : '';
-        const edmVal = m.edm_gal  != null ? m.edm_gal.toFixed(1)   : '';
+        const ref = this._historyRefField(m);
+        const trkVal = Number.isFinite(m[ref]) ? m[ref].toFixed(1) : '';
 
         // Replace row with edit inputs
         tr.innerHTML = `
@@ -963,9 +912,9 @@ class FuelOverlay {
                 <label class="fo-hist-edit-label">TIC</label>
                 <input type="number" class="fo-hist-edit-input" id="fo-hist-tic-${origIdx}"
                        value="${ticVal}" min="0" max="100" step="0.1">
-                <label class="fo-hist-edit-label">EDM</label>
-                <input type="number" class="fo-hist-edit-input" id="fo-hist-edm-${origIdx}"
-                       value="${edmVal}" min="0" max="100" step="0.1">
+                <label class="fo-hist-edit-label">TRACKED</label>
+                <input type="number" class="fo-hist-edit-input" id="fo-hist-tracked-${origIdx}"
+                       value="${trkVal}" min="0" max="100" step="0.1">
             </td>
             <td colspan="2" class="fo-hist-actions">
                 <button class="fo-hist-btn fo-hist-save">✔</button>
@@ -974,9 +923,9 @@ class FuelOverlay {
 
         wireTap(tr.querySelector('.fo-hist-save'), () => {
             const newTic = parseFloat(tr.querySelector(`#fo-hist-tic-${origIdx}`).value);
-            const newEdm = parseFloat(tr.querySelector(`#fo-hist-edm-${origIdx}`).value);
+            const newTrk = parseFloat(tr.querySelector(`#fo-hist-tracked-${origIdx}`).value);
             if (!isNaN(newTic)) m.total_gal = newTic;
-            if (!isNaN(newEdm)) m.edm_gal = newEdm;
+            if (!isNaN(newTrk)) m[ref] = newTrk;
             history[origIdx] = m;
             this._saveHistory(history);
             this._renderHistory();
@@ -985,6 +934,13 @@ class FuelOverlay {
         wireTap(tr.querySelector('.fo-hist-cancel'), () => {
             this._renderHistory();
         });
+    }
+
+    /** The comparison figure a history entry carries: tracked_gal on entries saved
+     *  since the tablet became the fuel source, edm_gal on older ones (the engine-data
+     *  fuel figure at the time), which have no tracked_gal. */
+    _historyRefField(m) {
+        return (m && m.tracked_gal != null) ? 'tracked_gal' : 'edm_gal';
     }
 
     _fmtDate(dt) {
@@ -1007,26 +963,42 @@ class FuelOverlay {
             totalFilled = stops.reduce((sum, s) => sum + (parseFloat(s.gallons) || 0), 0);
         } catch (_) { /* */ }
 
-        // Total EDM-computed fuel used: sum of drops between consecutive measurements with edm_gal
+        // Total tracked fuel used: over consecutive measurements (prev, next), the tic
+        // at prev minus the tracked figure just before next's tic was applied. Old
+        // entries carry only edm_gal (the engine-data fuel figure then) and fall back to it.
         let totalUsed = 0;
         try {
+            const toMs = (v) => { const t = new Date(v).getTime(); return Number.isFinite(t) ? t : null; };
+            const stopTimes = [];
+            try {
+                const stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]');
+                for (const st of stops) {
+                    const t = toMs(st?.saved_at) ?? (st?.date ? toMs(`${st.date}T${st.time || '00:00'}`) : null);
+                    if (t != null) stopTimes.push(t);
+                }
+            } catch (_) { /* no stops */ }
+
             const history = JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]');
-            const edmEntries = history.filter(m => m.edm_gal > 0).map(m => ({
-                ts: m.measured_at ? new Date(m.measured_at).getTime() : (m.ts || 0),
-                edm: m.edm_gal,
-                tic: m.total_gal || 0,
+            const entries = history.map(m => ({
+                ts: (m.measured_at ? toMs(m.measured_at) : null) ?? (Number.isFinite(m.ts) ? m.ts : 0),
+                tic: m.total_gal,
+                ref: m.tracked_gal ?? m.edm_gal,
             })).sort((a, b) => a.ts - b.ts);
 
-            for (let i = 1; i < edmEntries.length; i++) {
-                const edmDrop = edmEntries[i - 1].edm - edmEntries[i].edm;
-                const ticDrop = edmEntries[i - 1].tic - edmEntries[i].tic;
-                // Require EDM decreased and tic didn't increase — filters out post-refuel
-                // entries where tic increases (fuel added) but EDM still shows the stale
-                // pre-refuel value, which would produce a false "fuel used" reading.
-                // ticDrop === 0 is kept: the tic scale is quantized to 0.5 gal steps and
-                // can legitimately read flat between two close measurements while EDM
-                // shows real consumption.
-                if (edmDrop > 0 && ticDrop >= 0) totalUsed += edmDrop;
+            for (let i = 1; i < entries.length; i++) {
+                const prev = entries[i - 1];
+                const next = entries[i];
+                if (!Number.isFinite(prev.tic) || !Number.isFinite(next.tic) || !Number.isFinite(next.ref)) continue;
+                const used = prev.tic - next.ref;
+                // Require a positive drop and a tic that didn't increase — a tic that
+                // rose means fuel was added between the two. ticDrop === 0 is kept:
+                // the tic scale is quantized to 0.5 gal steps and can legitimately read
+                // flat between two close measurements.
+                if (!(used > 0) || next.tic > prev.tic) continue;
+                // A fuel stop re-initialises the tracker without writing history, so a
+                // pair spanning one mixes pre- and post-fill figures.
+                if (stopTimes.some(t => t > prev.ts && t < next.ts)) continue;
+                totalUsed += used;
             }
         } catch (_) { /* */ }
 
@@ -1051,78 +1023,13 @@ class FuelOverlay {
                 (dev < 0.05 ? 'fo-kf-good' : dev < 0.10 ? 'fo-kf-warn' : 'fo-kf-bad');
             this._dom.kfGuidance.textContent =
                 `New K-Factor = Current K-Factor × ${ratio.toFixed(3)}` +
-                (ratio > 1.0 ? '  (increase K-factor — EDM reads low)' : ratio < 1.0 ? '  (decrease K-factor — EDM reads high)' : '  (K-factor accurate)');
+                (ratio > 1.0 ? '  (increase K-factor — fuel flow reads low)' : ratio < 1.0 ? '  (decrease K-factor — fuel flow reads high)' : '  (K-factor accurate)');
         } else {
             this._dom.kfRatio.textContent = '--';
             this._dom.kfRatio.className = 'fo-kfactor-val fo-kfactor-ratio';
             this._dom.kfGuidance.textContent = totalFilled > 0
-                ? 'Record more tic measurements with EDM data to compute ratio.'
+                ? 'Record more tic measurements while fuel is tracked to compute ratio.'
                 : 'Record fuel stops to compute ratio.';
-        }
-    }
-
-    /** Best-effort read of the Pi's own K-factor calibration status. Passive
-     *  display refresh, same non-blocking pattern as _resolveEdmFuel() in
-     *  show() — on failure, leaves the panel hidden rather than showing stale
-     *  or fabricated numbers. */
-    async _fetchPiCalibration() {
-        const base = this._engineBaseUrl();
-        if (!base || !this._dom.kfPiSection) { if (this._dom.kfPiSection) this._dom.kfPiSection.style.display = 'none'; return; }
-        try {
-            const resp = await fetch(`${base}/api/fuel/calibration`, { signal: AbortSignal.timeout(4000) });
-            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            const status = await resp.json();
-            this._renderPiKFactor(status);
-        } catch (_) {
-            this._dom.kfPiSection.style.display = 'none';
-        }
-    }
-
-    _renderPiKFactor(status) {
-        this._piCalibration = status;
-        this._dom.kfPiSection.style.display = '';
-        this._dom.kfPiCurrent.textContent = status.current_k_factor != null ? String(status.current_k_factor) : '--';
-        if (status.ready) {
-            this._dom.kfPiSuggested.textContent = String(status.suggested_k_factor);
-            this._dom.kfPiRecommendation.textContent = status.recommendation || '';
-            this._dom.kfPiApply.style.display = '';
-        } else {
-            this._dom.kfPiSuggested.textContent = '--';
-            this._dom.kfPiRecommendation.textContent = status.message || '';
-            this._dom.kfPiApply.style.display = 'none';
-        }
-    }
-
-    /** Record the Pi's own suggested K-factor as applied (POST — the Pi does
-     *  not re-program the physical sensor; this is a log entry the pilot
-     *  confirms after manually setting the new K-factor on the Dynon EMS). */
-    async _applyPiKFactor() {
-        if (!this._piCalibration?.ready) return;
-        const newK = this._piCalibration.suggested_k_factor;
-        const base = this._engineBaseUrl();
-        if (!base) {
-            this._setStatus(this._dom.kfPiStatus, 'Pi unreachable — cannot record applied K-factor', 'error');
-            return;
-        }
-        this._dom.kfPiApply.disabled = true;
-        try {
-            const resp = await fetch(`${base}/api/fuel/calibration/applied`, {
-                method: 'POST',
-                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _setAddStatus).
-                body: JSON.stringify({ new_k_factor: newK }),
-                signal: AbortSignal.timeout(4000),
-            });
-            const result = await resp.json().catch(() => ({}));
-            if (resp.ok && result.success) {
-                this._setStatus(this._dom.kfPiStatus, result.message || `K-factor ${newK} recorded as applied`, 'ok');
-                await this._fetchPiCalibration();
-            } else {
-                this._setStatus(this._dom.kfPiStatus, result.error || `Pi returned ${resp.status}`, 'error');
-            }
-        } catch (err) {
-            this._setStatus(this._dom.kfPiStatus, `Pi sync failed (${err.message})`, 'error');
-        } finally {
-            this._dom.kfPiApply.disabled = false;
         }
     }
 

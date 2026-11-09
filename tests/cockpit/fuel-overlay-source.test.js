@@ -91,24 +91,28 @@ describe('FuelOverlay active fuel source', () => {
     });
 });
 
-describe('EDM freshness window (used by the fuel overlay comparison)', () => {
+describe('D-180 fuel figure freshness (used by the fuel overlay comparison)', () => {
     it('EDM_FRESHNESS_MS is a positive number', () => {
         expect(FuelState.EDM_FRESHNESS_MS).toBeGreaterThan(0);
     });
 
-    it('_resolveEdmFuel returns a fresh live panel value without any fetch', async () => {
+    it('_resolveD180Fuel returns a fresh D-180 Fuel_Remaining synchronously, without any fetch', () => {
         let fetched = 0;
         globalThis.fetch = () => { fetched++; return Promise.reject(new Error('no fetch expected')); };
-        window.enginePanel = { lastData: { fuel: { fuel_remaining: 16.9 } }, lastPollTime: Date.now() };
-        expect(FuelEngine.extractEdmFuel(window.enginePanel.lastData)).toBeCloseTo(16.9, 5);
-        expect(await overlay._resolveEdmFuel()).toBeCloseTo(16.9, 5);
+        window.enginePanel = { lastData: { Fuel_Remaining: 16.9, fuel: { fuel_remaining: 30 } },
+            lastPollTime: Date.now() };
+        expect(overlay._resolveD180Fuel()).toBeCloseTo(16.9, 5);
         expect(fetched).toBe(0);
     });
 
-    it('a stale panel reading is not used as live', async () => {
-        globalThis.fetch = () => Promise.reject(new Error('offline'));
-        window.enginePanel = { lastData: { fuel: { fuel_remaining: 16.9 } },
+    it('ignores the Pi tracker figure (data.fuel.*)', () => {
+        window.enginePanel = { lastData: { fuel: { fuel_remaining: 16.9 } }, lastPollTime: Date.now() };
+        expect(overlay._resolveD180Fuel()).toBeNull();
+    });
+
+    it('a stale panel reading is not used as live', () => {
+        window.enginePanel = { lastData: { Fuel_Remaining: 16.9 },
             lastPollTime: Date.now() - FuelState.EDM_FRESHNESS_MS - 1000 };
-        expect(await overlay._resolveEdmFuel()).toBeNull();
+        expect(overlay._resolveD180Fuel()).toBeNull();
     });
 });

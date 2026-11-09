@@ -6128,6 +6128,14 @@ body.fs-overlay-open .radar-loop-controls {
     border-radius: 4px;
     text-align: center;
 }
+.fo-edm-d180 {
+    margin-top: 4px;
+    text-align: center;
+    font-family: var(--font-instrument);
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
+}
 .fo-grade-excellent { background: var(--color-success); color: #000; }
 .fo-grade-good { background: var(--color-caution); color: #000; }
 .fo-grade-check { background: var(--color-danger); color: #fff; }

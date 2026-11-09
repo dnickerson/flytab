@@ -80,21 +80,18 @@ class FuelEngine {
     }
 
     /**
-     * Extract EDM fuel remaining from engine data (normalizes field name variants).
+     * Extract the Dynon D-180 EMS's own fuel-remaining figure (EMS serial field 12,
+     * forwarded by the Pi as data.Fuel_Remaining). This is an instrument reading.
+     * The Pi's own tracker (data.fuel.*) is deliberately NOT read: fuel on board is
+     * tracked on the tablet (FuelTankState). Fuel_Remaining is the only name the Pi
+     * emits (engine_monitor.py parse); the old aliases were never sent by it.
      * @param {object} data - Engine poll data
      * @returns {number} Fuel remaining in gallons (0 if unavailable)
      */
     static extractEdmFuel(data) {
         if (!data) return 0;
-        // data.fuel.fuel_remaining = Pi integrated tracker (primary source)
-        // data.Fuel_Remaining = EDM resistive sender (0 unless aircraft has tank senders)
-        return data.fuel?.fuel_remaining
-            ?? data.fuel_remaining_gal
-            ?? data.fuel_gal
-            ?? data.gallons_rem
-            ?? data.Gallons_Rem
-            ?? data.Fuel_Remaining
-            ?? 0;
+        const v = Number(data.Fuel_Remaining);
+        return Number.isFinite(v) ? v : 0;
     }
 
     /**

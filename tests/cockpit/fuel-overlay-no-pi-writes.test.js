@@ -27,10 +27,9 @@ let overlay = null;
 let fetchSpy = null;
 let realFetch = null;
 
-// show() still does a passive GET of /api/fuel/calibration (the PI K-FACTOR panel,
-// removed in a later task); only the fuel WRITE endpoints are in scope here.
-const piFuelCalls = () => fetchSpy.mock.calls.filter(([u]) =>
-    typeof u === 'string' && /\/api\/fuel\/(set|add|apply_dropped_burn|history)\b/.test(u));
+// ANY request to the Pi's /api/fuel* endpoints (writes, reads, calibration) fails:
+// the overlay no longer talks to the Pi about fuel at all.
+const piFuelCalls = () => fetchSpy.mock.calls.filter(([u]) => /\/api\/fuel/.test(String(u)));
 const tap = (id) => overlay._el.querySelector('#' + id)
     .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 const settle = () => new Promise(r => setTimeout(r, 30));

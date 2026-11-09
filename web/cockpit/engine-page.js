@@ -193,11 +193,11 @@ class EnginePage {
                 <span class="ep-fuel-bar-label" id="ep-fuel-bar-label">--% (--/-- gal)</span>
             </div>
 
-            <!-- TIC vs EDM variance row -->
+            <!-- TIC vs D-180 variance row (D-180 EMS fuel computer, field 12) -->
             <div class="ep-tic-edm-row" id="ep-tic-edm-row" style="display:none;">
-                <span class="ep-tic-edm-label">TIC vs EDM</span>
+                <span class="ep-tic-edm-label">TIC vs D-180</span>
                 <span class="ep-tic-edm-item">TIC: <span id="ep-tic-total">--</span></span>
-                <span class="ep-tic-edm-item">EDM: <span id="ep-edm-total">--</span></span>
+                <span class="ep-tic-edm-item">D-180: <span id="ep-edm-total">--</span></span>
                 <span class="ep-tic-edm-item">\u0394: <span id="ep-tic-var">--</span></span>
                 <span class="ep-tic-edm-grade" id="ep-tic-grade">--</span>
             </div>

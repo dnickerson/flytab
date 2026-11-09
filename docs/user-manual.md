@@ -250,7 +250,7 @@ The badge at the top tells you whether the numbers are current: **LIVE** — fre
 
 The total-fuel bar shows fuel remaining against the aircraft's full capacity from the aircraft page (36 gallons, 2 × 18-gallon tanks). It previously used a hardcoded 34, so percentages now read slightly lower for the same gallons — about 3 points lower at half tanks. The bar turns amber at 8 gallons and red at 4, matching the DEST badge thresholds. Those two figures are configurable (`enginePage.fuelCautionGal` / `fuelWarningGal`); changing them previously had no effect on this bar, and now does.
 
-The **TIC vs EDM** row is unchanged — it still compares your tic-mark measurement against the EDM's own totalizer. Disagreement between those two is exactly what the row exists to show, so it deliberately does not use the tracked figure.
+The **TIC vs D-180** row (formerly labelled TIC vs EDM) compares your last tic-mark measurement against the Dynon D-180's own fuel-remaining figure, the fuel computer in the EMS. Disagreement between those two is exactly what the row exists to show, so it deliberately does not use the tracked figure. Only the label changed; the figure it reads is the same.
 
 The **engine advisory banner** (below the status bar, on any tab) shows engine warnings for 15 seconds each. There are two kinds:
 - **Rule-based warnings, in red.** These fire on:
@@ -752,6 +752,8 @@ If device storage fills up, an import fails without crashing: the panel shows "S
 
 If a tic-mark reading would imply more fuel than a tank actually holds, FlyTab highlights the affected tank's gallons figure and refuses APPLY TIC MEASUREMENT or RECORD FUEL STOP until the reading is corrected — this catches a mis-set slider or fat-fingered tic value before it overwrites tracked fuel with an impossible number.
 
+**TIC vs TRACKED.** When FlyTab is tracking fuel, a TIC vs TRACKED block appears under the tic total as you set the sliders: **TIC** is the reading you have entered, **TRACKED** is the fuel FlyTab is tracking right now (left + right tank, before this reading is applied), **VARIANCE** is TIC minus TRACKED, and **ACCURACY** grades the difference (EXCELLENT under 5 %, GOOD up to 10 %, CHECK above that). A manual override is not shown as TRACKED, since it is your own entry, not a measurement. If the tracked figure is unconfirmed (45+ minutes without a fuel-flow sample), it reads `(UNCONFIRMED)` after the number: it reads high, so a negative variance (TIC below TRACKED) is expected. With nothing tracked, the block is hidden. When the D-180's own fuel figure is current, a smaller **D-180: x gal** line under the block shows it for reference. This block used to compare against the Pi's fuel figure (labelled EDM); the Pi's tracker is no longer used. Applying the tic, or recording a fuel stop, saves both the tracked and the D-180 figures with the measurement, and the MEASUREMENT HISTORY table's former EDM column is now **TRACKED** (older entries show the figure saved at the time).
+
 Fuel on board is kept on the tablet only. APPLY TIC MEASUREMENT, RECORD FUEL STOP and APPLY CORRECTION change FlyTab's own fuel record and nothing is sent to the Pi, so they work the same with or without the Pi's WiFi, and there is no sync step to retry.
 
 If FlyTab detects a gap of more than a few seconds in engine data since the last fuel-flow sample (e.g. a Wi-Fi dropout), a caution line reading "Possible under-tracked burn during a comms gap" appears above the tic total when you open the Fuel Entry screen, with the estimated gallons that may not have been tracked during the gap shown in an editable field — review the figure, edit it if you have reason to think the estimate is off, then tap **APPLY CORRECTION** to subtract it from the active tank on the tablet. This caution also clears on its own, with no action needed, once you record a new tic measurement or fuel stop — a fresh physical measurement always supersedes an estimate.
@@ -780,9 +782,11 @@ The **FUEL** field in the instrument strip along the bottom of the map is the in
 
 ### K-Factor Calculator
 
-The Fuel Entry screen's K-FACTOR CALCULATOR section computes a ratio of actual fuel filled (from recorded fuel stops) against fuel used per the EDM, to check whether the fuel-flow sensor's K-factor is still accurate.
+The Fuel Entry screen's K-FACTOR CALCULATOR section checks whether the D-180's fuel-flow K-factor is still accurate. **FUEL FILLED** is the total of your recorded fuel stops. **FUEL USED (TRACKED)** is the fuel FlyTab tracked as burned between consecutive tic measurements — the tic at one measurement minus the tracked figure just before the next. Tracked burn is integrated from the D-180's fuel-flow reading, so the **RATIO** (filled ÷ used) tells you how far that reading is off: multiply the D-180's current K-factor by the ratio and set the result on the EMS per its own calibration procedure. A ratio above 1 means fuel flow reads low (increase the K-factor); below 1, it reads high (decrease it).
 
-Below the calculator, a PI K-FACTOR (LIVE) panel shows the K-factor currently programmed into the Pi's own tracker, and — once the Pi has logged at least 30 gal of fuel additions — a suggested new value with a recommendation. Tapping APPLY TO PI only records that you applied the suggested value to the physical Dynon EMS; it does not reprogram the sensor itself, which must still be set manually on the EMS per its own calibration procedure.
+A pair of measurements is left out when the tic rose between them, or when a fuel stop was recorded between them (a fuel stop resets the tracked figure, so that pair would mix before- and after-fill numbers). Older measurements saved before the tablet tracked fuel use the figure saved with them at the time.
+
+The PI K-FACTOR (LIVE) panel and its APPLY TO PI button have been removed: the Pi's own fuel tracker is no longer used, and FlyTab no longer asks the Pi for its K-factor.
 
 ### Route table DIST and TIME columns
 
