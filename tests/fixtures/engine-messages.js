@@ -4,8 +4,8 @@
 
 const ENGINE_FRAME = {
     version:               '3.4.0',
-    api_contract:           2,
-    capabilities:          ['fuel_tracker', 'peak_egt'],
+    api_contract:           3,
+    capabilities:          ['peak_egt', 'gps_fix_quality'],
     capturing:             true,
     serial_connected:      true,
     stratux_connected:     false,
@@ -27,7 +27,6 @@ const ENGINE_FRAME = {
     peaks_valid:           false,
     manual_altimeter:      null,
     manual_oat:            null,
-    fuel:                  null,
     data: {
         RPM:        2200,
         MP:           24.5,
@@ -64,9 +63,18 @@ const { api_contract: _omitContract, capabilities: _omitCaps, ...ENGINE_FRAME_NO
 // flight_fuel_used moved under 'fuel') without the api_contract bump itself.
 const ENGINE_FRAME_OLD_CONTRACT = { ...ENGINE_FRAME, api_contract: 1 };
 
+// Pi not redeployed since contract 3 (Pi fuel tracker removed): still publishes
+// contract 2 and the old status 'fuel' block.
+const ENGINE_FRAME_CONTRACT_2 = {
+    ...ENGINE_FRAME,
+    api_contract: 2,
+    capabilities: ['fuel_tracker', 'peak_egt', 'gps_fix_quality'],
+    fuel: { fuel_remaining: 20 },
+};
+
 const ENGINE_STALE_EVENT = { stale: true, ageMs: 6000 };
 
 module.exports = {
     ENGINE_FRAME, ENGINE_FRAME_FLAT, ENGINE_STALE_EVENT,
-    ENGINE_FRAME_NO_CONTRACT, ENGINE_FRAME_OLD_CONTRACT,
+    ENGINE_FRAME_NO_CONTRACT, ENGINE_FRAME_OLD_CONTRACT, ENGINE_FRAME_CONTRACT_2,
 };

@@ -18,7 +18,7 @@ Usage:
 Access at: http://stratux.local:8080
 """
 
-VERSION = "3.4.2"
+VERSION = "3.5.0"
 
 # Contract version for the payload shape and shared physical constants FlyTab
 # depends on (field names, nesting, units, usable_capacity_gal and similar).
@@ -28,12 +28,16 @@ VERSION = "3.4.2"
 # (usable_capacity_gal 34->36, flight_fuel_used moved under 'fuel') — this
 # value retroactively names that shape "2" so a Pi that has not been
 # redeployed since then correctly reports as behind. See issue #113.
-PI_API_CONTRACT = 2
+# 3 (2026-11-09): the Pi fuel tracker was removed (status 'fuel' block, every
+# /api/fuel/* endpoint and the 'fuel_tracker' capability); fuel is tracked on
+# the tablet. The Dynon EMS fields in 'data' (Fuel_Flow, Fuel_Remaining,
+# Fuel_Left, Fuel_Right) are unchanged.
+PI_API_CONTRACT = 3
 
 # Optional features this build of engine_monitor.py supports, independent of
-# api_contract — a client can check `'fuel_tracker' in capabilities` rather
+# api_contract — a client can check `'peak_egt' in capabilities` rather
 # than inferring feature support from a version/contract number comparison.
-PI_CAPABILITIES = ["fuel_tracker", "peak_egt", "gps_fix_quality"]
+PI_CAPABILITIES = ["peak_egt", "gps_fix_quality"]
 
 import os
 import sys
@@ -49,8 +53,6 @@ from datetime import datetime
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 import glob
-import uuid
-import shutil
 import hmac
 import secrets
 
@@ -111,29 +113,6 @@ CONFIG = {
 # Server-side CSV header (matches client format for compatibility)
 CSV_HEADER = 'Zulu_Time,MP,Oil Temp,Oil Pressure,Fuel Pressure,Volts,Amps,RPM,Fuel Flow,Gallons Remaining,Fuel Level 1,Fuel Level 2,Carb Temp,GP 2,GP 3,Thermalcouple,EGT 1,EGT 2,EGT 3,EGT 4,CHT 1,CHT 2,CHT 3,CHT 4,date,time_z,longitude,latitude,altitude_ft,speed_kts,bank,pitch,acc_vert,course,EGT Spread,CHT Spread,Max EGT,Final_Percent_Power,Operating_Condition,Percent,SFC'
 
-# Fuel tracking configuration
-FUEL_CONFIG = {
-    'capacity_gal': 36.0,           # Aircraft fuel capacity (2x 18 gal tanks) — canonical
-    # DEPRECATED (2026-07-31, owner decision): the "usable capacity" concept is retired.
-    # Capacity is 36 gal total / 18 per side everywhere, matching the canonical value in
-    # web/aircraft-config.json (performance.fuel_capacity_gal), which the aircraft page
-    # edits. This key is kept only so the emitted JSON keys below ('capacity' in
-    # get_status(), 'usable_capacity' in fuel_data.json) keep their names; it is now just
-    # an alias for capacity_gal and no new code should reference it.
-    'usable_capacity_gal': 36.0,
-    'low_fuel_warning_gal': 8.0,    # Yellow warning threshold
-    'low_fuel_critical_gal': 4.0,   # Red warning threshold
-    'min_endurance_minutes': 45,    # Endurance warning threshold
-    'data_file': 'fuel_data.json',  # Persistent storage file
-    'cruise_rpm_min': 2000,         # Minimum RPM to consider cruise
-    'cruise_rpm_max': 2600,         # Maximum RPM to consider cruise
-    'cruise_mp_min': 18,            # Minimum MP to consider cruise
-    'cruise_mp_max': 26,            # Maximum MP to consider cruise
-    'cruise_gs_min': 80,            # Minimum ground speed to consider cruise
-    'k_factor_default': 68000,      # EI FT-60 Red Cube default K-factor
-    'save_interval': 60,            # Save state every 60 seconds during operation
-}
-
 # Standard atmosphere constants
 ISA_SEA_LEVEL_TEMP_C = 15.0  # Standard temp at sea level in Celsius
 ISA_LAPSE_RATE = 0.00198  # °C per foot (approximately 2°C per 1000 ft)
@@ -146,577 +125,6 @@ FIELD_NAMES = ['hours', 'minutes', 'seconds', 'factor', 'MP', 'Oil_Temp', 'Oil_P
                'Fuel_L1', 'Fuel_L2', 'Carb_Temp', 'GP2', 'GP3', 'Thermo',
                'EGT1', 'EGT2', 'EGT3', 'EGT4', 'DROP2', 'DROP3',
                'CHT1', 'CHT2', 'CHT3', 'CHT4', 'DROP4', 'DROP5']
-
-
-class KFactorCalibration:
-    """Tracks fuel flow sensor calibration data for EI FT-60 Red Cube."""
-
-    def __init__(self):
-        self.current_k_factor = FUEL_CONFIG['k_factor_default']
-        self.period_start = None
-        self.total_fuel_added = 0.0
-        self.total_computed_used = 0.0
-        self.calibration_history = []
-
-    def start_period(self):
-        """Begin new calibration period."""
-        self.period_start = datetime.now().isoformat()
-        self.total_fuel_added = 0.0
-        self.total_computed_used = 0.0
-
-    def record_fuel_addition(self, gallons):
-        """Record actual fuel added from pump."""
-        self.total_fuel_added += gallons
-
-    def record_computed_usage(self, gallons):
-        """Record computed fuel used from integration."""
-        self.total_computed_used += gallons
-
-    def get_calibration_status(self):
-        """Return current calibration data and recommendation."""
-        if self.total_fuel_added < 30:
-            return {
-                'ready': False,
-                'message': f'Need more data: {self.total_fuel_added:.1f} gal added, recommend 30+ gal',
-                'current_k_factor': self.current_k_factor,
-                'period_start': self.period_start,
-                'fuel_added': round(self.total_fuel_added, 1),
-                'computed_used': round(self.total_computed_used, 1),
-            }
-
-        k_ratio = self.total_computed_used / self.total_fuel_added if self.total_fuel_added > 0 else 1.0
-        suggested_k = round(self.current_k_factor * k_ratio)
-        variance_percent = (k_ratio - 1.0) * 100
-
-        return {
-            'ready': True,
-            'current_k_factor': self.current_k_factor,
-            'period_start': self.period_start,
-            'fuel_added': round(self.total_fuel_added, 1),
-            'computed_used': round(self.total_computed_used, 1),
-            'k_factor_ratio': round(k_ratio, 4),
-            'variance_percent': round(variance_percent, 1),
-            'suggested_k_factor': suggested_k,
-            'recommendation': self._get_recommendation(variance_percent)
-        }
-
-    def _get_recommendation(self, variance_percent):
-        """Generate human-readable recommendation."""
-        if abs(variance_percent) < 1.0:
-            return "K-factor is accurate (within 1%). No adjustment needed."
-        elif variance_percent > 0:
-            return f"Sensor reads {variance_percent:.1f}% HIGH. Increase K-factor."
-        else:
-            return f"Sensor reads {abs(variance_percent):.1f}% LOW. Decrease K-factor."
-
-    def apply_k_factor(self, new_k_factor):
-        """Record that user applied new K-factor to Dynon EMS."""
-        self.calibration_history.append({
-            'date': datetime.now().isoformat(),
-            'old_k_factor': self.current_k_factor,
-            'new_k_factor': new_k_factor,
-            'fuel_added': self.total_fuel_added,
-            'computed_used': self.total_computed_used,
-            'k_ratio': self.total_computed_used / self.total_fuel_added if self.total_fuel_added > 0 else 1.0
-        })
-        self.current_k_factor = new_k_factor
-        self.start_period()  # Reset for next period
-
-    def to_dict(self):
-        """Convert to dictionary for JSON serialization."""
-        return {
-            'current_k_factor': self.current_k_factor,
-            'period_start': self.period_start,
-            'total_fuel_added': self.total_fuel_added,
-            'total_computed_used': self.total_computed_used,
-            'history': self.calibration_history
-        }
-
-    def from_dict(self, data):
-        """Load from dictionary."""
-        self.current_k_factor = data.get('current_k_factor', FUEL_CONFIG['k_factor_default'])
-        self.period_start = data.get('period_start')
-        self.total_fuel_added = data.get('total_fuel_added', 0.0)
-        self.total_computed_used = data.get('total_computed_used', 0.0)
-        self.calibration_history = data.get('history', [])
-
-
-class FuelTracker:
-    """
-    Manages fuel state, consumption tracking, and persistence.
-    Integrates fuel flow over time to track fuel remaining.
-    """
-
-    # Cap the integrated interval between samples to avoid a stale/huge dt (serial
-    # reconnect, Pi restart) blowing up a single fuel_increment. Excess time past
-    # this is tracked separately in dropped_burn_estimate_gal instead of integrated.
-    MAX_SAMPLE_GAP_HOURS = 10.0 / 3600.0
-
-    def __init__(self, data_dir):
-        self.lock = threading.RLock()  # RLock allows reentrant locking (same thread can acquire multiple times)
-        self.data_dir = data_dir
-        self.data_file = os.path.join(data_dir, FUEL_CONFIG['data_file'])
-
-        # Core state
-        self.fuel_remaining = 0.0
-        self.flight_fuel_used = 0.0
-        self.total_since_fill = 0.0
-        self.last_edm_timestamp = None
-        self.last_updated = None
-        self.engine_running = False
-        self.flight_start_time = None
-
-        # Cruise efficiency tracking
-        self.cruise_samples = []  # List of (timestamp, fuel_flow, ground_speed) tuples
-        self.cruise_sample_limit = 600  # 10 minutes at 1Hz
-
-        # Persistence
-        self.last_save_time = 0
-
-        # K-factor calibration
-        self.calibration = KFactorCalibration()
-
-        # History
-        self.fuel_additions = []
-        self.flight_history = []
-
-        # Warnings
-        self.fuel_warning_dismissed = False
-
-        # EDM fuel tank readings (from EDM-700/800)
-        self.edm_fuel_total = 0.0  # Total fuel remaining from EDM
-        self.edm_fuel_left = 0.0   # Left tank from EDM
-        self.edm_fuel_right = 0.0  # Right tank from EDM
-
-        # Fuel burned during sample gaps >= MAX_SAMPLE_GAP_HOURS (comms drop, serial
-        # reconnect) — tracked but not auto-applied to fuel_remaining, same rationale
-        # as FlyTab's FuelTankState.dropped_burn_estimate_gal: the gap-time GPH is
-        # extrapolated from whatever reading arrives right after the gap, which may
-        # not represent what was actually happening during it, so applying it needs
-        # pilot confirmation (see apply_dropped_burn()).
-        self.dropped_burn_estimate_gal = 0.0
-
-        # Load existing state
-        self._load_state()
-
-    def update(self, fuel_flow, edm_timestamp, ground_speed, rpm, mp,
-                fuel_total=0, fuel_left=0, fuel_right=0):
-        """
-        Process a new data sample. Called from capture_thread_func.
-
-        Args:
-            fuel_flow: Current fuel flow in GPH
-            edm_timestamp: EDM timestamp in seconds since midnight
-            ground_speed: Ground speed in knots (from Stratux)
-            rpm: Engine RPM
-            mp: Manifold pressure in inHg
-            fuel_total: EDM total fuel remaining (gallons)
-            fuel_left: EDM left tank fuel (gallons)
-            fuel_right: EDM right tank fuel (gallons)
-        """
-        with self.lock:
-            current_time = time.time()
-
-            # Store EDM fuel tank readings
-            self.edm_fuel_total = fuel_total
-            self.edm_fuel_left = fuel_left
-            self.edm_fuel_right = fuel_right
-
-            # Detect engine start/stop
-            was_running = self.engine_running
-            self.engine_running = rpm > 500
-
-            if self.engine_running and not was_running:
-                self._on_engine_start(current_time)
-            elif not self.engine_running and was_running:
-                self._on_engine_stop()
-
-            # Integrate fuel consumption
-            if self.last_edm_timestamp is not None and self.engine_running:
-                dt = edm_timestamp - self.last_edm_timestamp
-
-                # Handle midnight wraparound
-                if dt < 0:
-                    dt += 86400  # 24 hours in seconds
-
-                # Convert to hours for GPH calculation
-                dt_hours = dt / 3600.0
-
-                if dt_hours > 0:
-                    # Cap the integrated portion at MAX_SAMPLE_GAP_HOURS (serial
-                    # reconnect / Pi restart shouldn't blow up a single increment
-                    # from a stale dt). Any excess is tracked, not discarded — see
-                    # dropped_burn_estimate_gal and apply_dropped_burn().
-                    integrated_hours = min(dt_hours, self.MAX_SAMPLE_GAP_HOURS)
-                    self._debit_fuel(fuel_flow * integrated_hours)
-
-                    dropped_hours = dt_hours - integrated_hours
-                    if dropped_hours > 0:
-                        self.dropped_burn_estimate_gal += fuel_flow * dropped_hours
-
-            self.last_edm_timestamp = edm_timestamp
-            self.last_updated = datetime.now().isoformat()
-
-            # Track cruise samples for efficiency calculation
-            if self._is_cruise(rpm, mp, ground_speed):
-                self.cruise_samples.append((current_time, fuel_flow, ground_speed))
-                if len(self.cruise_samples) > self.cruise_sample_limit:
-                    self.cruise_samples.pop(0)
-
-            # Periodic save
-            self._maybe_save(current_time)
-
-    def _is_cruise(self, rpm, mp, ground_speed):
-        """Determine if currently in stable cruise flight."""
-        return (
-            FUEL_CONFIG['cruise_rpm_min'] < rpm < FUEL_CONFIG['cruise_rpm_max'] and
-            FUEL_CONFIG['cruise_mp_min'] < mp < FUEL_CONFIG['cruise_mp_max'] and
-            ground_speed > FUEL_CONFIG['cruise_gs_min']
-        )
-
-    def get_cruise_efficiency(self):
-        """Calculate nm/gal, range, endurance from cruise samples."""
-        with self.lock:
-            if len(self.cruise_samples) < 60:  # Need ~1 minute of data
-                return None
-
-            # Use last 5 minutes of cruise data
-            recent = self.cruise_samples[-300:]
-
-            avg_ff = sum(s[1] for s in recent) / len(recent)
-            avg_gs = sum(s[2] for s in recent) / len(recent)
-
-            if avg_ff <= 0:
-                return None
-
-            nmpg = avg_gs / avg_ff
-
-            return {
-                'avg_fuel_flow': round(avg_ff, 1),
-                'avg_ground_speed': round(avg_gs, 0),
-                'nm_per_gallon': round(nmpg, 1),
-                'range_remaining': round(self.fuel_remaining * nmpg, 0),
-                'endurance_hours': round(self.fuel_remaining / avg_ff, 2)
-            }
-
-    def check_warnings(self):
-        """Check for low fuel and low endurance warnings."""
-        warnings = []
-
-        with self.lock:
-            if self.fuel_warning_dismissed:
-                return warnings
-
-            if self.fuel_remaining <= FUEL_CONFIG['low_fuel_critical_gal']:
-                warnings.append({
-                    'level': 'critical',
-                    'message': f'CRITICAL: {self.fuel_remaining:.1f} gal remaining'
-                })
-            elif self.fuel_remaining <= FUEL_CONFIG['low_fuel_warning_gal']:
-                warnings.append({
-                    'level': 'warning',
-                    'message': f'LOW FUEL: {self.fuel_remaining:.1f} gal remaining'
-                })
-
-            # Check endurance
-            efficiency = self.get_cruise_efficiency()
-            if efficiency:
-                endurance_min = efficiency['endurance_hours'] * 60
-                if endurance_min < FUEL_CONFIG['min_endurance_minutes']:
-                    warnings.append({
-                        'level': 'warning',
-                        'message': f'LOW ENDURANCE: {int(endurance_min)} min at current consumption'
-                    })
-
-        return warnings
-
-    def _on_engine_start(self, timestamp):
-        """Reset flight counters on engine start."""
-        self.flight_fuel_used = 0.0
-        self.cruise_samples = []
-        self.flight_start_time = timestamp
-        self.fuel_warning_dismissed = False
-        log("FuelTracker: Engine start detected - flight counters reset")
-
-    def _on_engine_stop(self):
-        """Log flight record on engine stop."""
-        if self.flight_start_time is None:
-            return
-
-        duration_minutes = (time.time() - self.flight_start_time) / 60
-
-        # Only log if flight was > 5 minutes
-        if duration_minutes > 5 and self.flight_fuel_used > 0.5:
-            efficiency = self.get_cruise_efficiency()
-            flight_record = {
-                'id': str(uuid.uuid4()),
-                'date': datetime.now().isoformat(),
-                'duration_minutes': round(duration_minutes, 1),
-                'fuel_used': round(self.flight_fuel_used, 1),
-                'fuel_remaining_start': round(self.fuel_remaining + self.flight_fuel_used, 1),
-                'fuel_remaining_end': round(self.fuel_remaining, 1),
-            }
-            if efficiency:
-                flight_record['avg_cruise_ff'] = efficiency['avg_fuel_flow']
-                flight_record['avg_cruise_gs'] = efficiency['avg_ground_speed']
-                flight_record['efficiency_nmpg'] = efficiency['nm_per_gallon']
-
-            self.flight_history.append(flight_record)
-            # Keep last 50 flights
-            if len(self.flight_history) > 50:
-                self.flight_history = self.flight_history[-50:]
-
-            # Record computed usage for K-factor calibration
-            self.calibration.record_computed_usage(self.flight_fuel_used)
-
-            log(f"FuelTracker: Flight logged - {duration_minutes:.1f} min, {self.flight_fuel_used:.1f} gal used")
-            self._save_state()
-
-        self.flight_start_time = None
-
-    def add_fuel(self, gallons, airport='', price_per_gallon=None, notes='',
-                 set_total=False, include_in_calibration=True):
-        """
-        Record fuel addition.
-
-        A fresh fuel-stop entry supersedes any outstanding dropped-burn debt from
-        whatever gap happened before it — mirrors FlyTab's FuelTankState.init(),
-        which resets dropped_burn_estimate_gal to 0 on every fresh measurement.
-        Without this, applying a dropped-burn correction after a fuel stop would
-        double-subtract fuel the fresh total already accounted for.
-
-        Args:
-            gallons: Gallons added (or total if set_total=True)
-            airport: Airport identifier
-            price_per_gallon: Price per gallon (optional)
-            notes: Notes about the fuel addition
-            set_total: If True, set fuel_remaining to gallons; if False, add gallons
-            include_in_calibration: Include in K-factor calibration
-        """
-        with self.lock:
-            fuel_before = self.fuel_remaining
-
-            if set_total:
-                self.fuel_remaining = gallons
-                gallons_added = gallons - fuel_before
-            else:
-                self.fuel_remaining += gallons
-                gallons_added = gallons
-
-            # Cap at aircraft capacity (36 gal; "usable capacity" is deprecated)
-            self.fuel_remaining = min(self.fuel_remaining, FUEL_CONFIG['capacity_gal'])
-            self.dropped_burn_estimate_gal = 0.0
-
-            # Reset total since fill if this was a fill-up
-            if set_total or self.fuel_remaining >= FUEL_CONFIG['capacity_gal'] * 0.95:
-                self.total_since_fill = 0.0
-
-            addition = {
-                'id': str(uuid.uuid4()),
-                'date': datetime.now().strftime('%Y-%m-%d'),
-                'time': datetime.now().strftime('%H:%M'),
-                'airport': airport.upper() if airport else '',
-                'gallons': round(gallons_added, 1),
-                'price_per_gallon': price_per_gallon,
-                'total_cost': round(gallons_added * price_per_gallon, 2) if price_per_gallon else None,
-                'fuel_remaining_before': round(fuel_before, 1),
-                'fuel_remaining_after': round(self.fuel_remaining, 1),
-                'set_total': set_total,
-                'include_in_calibration': include_in_calibration,
-                'notes': notes
-            }
-            self.fuel_additions.append(addition)
-
-            # Record for K-factor calibration
-            if include_in_calibration and gallons_added > 0:
-                self.calibration.record_fuel_addition(gallons_added)
-
-            self.last_updated = datetime.now().isoformat()
-            log(f"FuelTracker: Added {gallons_added:.1f} gal at {airport}, now {self.fuel_remaining:.1f} gal")
-            self._save_state()
-
-            return addition
-
-    def set_fuel(self, gallons, reason=''):
-        """Manual override of fuel remaining. A fresh ground-truth reading (tic
-        mark, fuel stop) supersedes any outstanding dropped-burn debt from
-        whatever gap happened before it — mirrors FlyTab's FuelTankState.init(),
-        which resets dropped_burn_estimate_gal to 0 on every fresh measurement."""
-        with self.lock:
-            old_value = self.fuel_remaining
-            self.fuel_remaining = max(0, min(gallons, FUEL_CONFIG['capacity_gal']))
-            self.dropped_burn_estimate_gal = 0.0
-            self.last_updated = datetime.now().isoformat()
-            log(f"FuelTracker: Manual set from {old_value:.1f} to {self.fuel_remaining:.1f} gal - {reason}")
-            self._save_state()
-
-    def dismiss_warning(self):
-        """Dismiss fuel warning for this flight."""
-        with self.lock:
-            self.fuel_warning_dismissed = True
-
-    def _debit_fuel(self, gallons):
-        """
-        Shared fuel_remaining/flight_fuel_used/total_since_fill debit, used by
-        both update()'s normal integration and apply_dropped_burn()'s correction
-        so the two accounting paths can't drift apart. Caller holds self.lock.
-        """
-        self.flight_fuel_used += gallons
-        self.total_since_fill += gallons
-        self.fuel_remaining = max(0, self.fuel_remaining - gallons)
-
-    def apply_dropped_burn(self, gallons):
-        """
-        Apply a correction for fuel burned during a comms gap. Mirrors FlyTab's
-        FuelTankState.applyDroppedBurn() — dropped_burn_estimate_gal is tracked
-        automatically in update() but never auto-applied, since it extrapolates
-        from whatever GPH arrived right after the gap and may not reflect what
-        was actually happening during it. Callers pass this tracker's OWN
-        dropped_burn_estimate_gal (see the /api/fuel/apply_dropped_burn handler) —
-        FlyTab's independently-computed estimate is a different quantity from a
-        different sample stream and must not be applied here.
-        """
-        with self.lock:
-            if gallons <= 0:
-                return
-            self._debit_fuel(gallons)
-            self.dropped_burn_estimate_gal = max(0, self.dropped_burn_estimate_gal - gallons)
-            self.last_updated = datetime.now().isoformat()
-            log(f"FuelTracker: Applied dropped-burn correction of {gallons:.1f} gal, now {self.fuel_remaining:.1f} gal")
-            self._save_state()
-
-    def apply_own_dropped_burn(self):
-        """
-        Atomically read-and-apply this tracker's own current
-        dropped_burn_estimate_gal. self.lock is an RLock, so this and the nested
-        apply_dropped_burn() call both hold it for the whole read-then-apply —
-        without that, a read here followed by capture_thread_func's concurrent
-        update() mutating dropped_burn_estimate_gal before apply_dropped_burn()
-        runs would apply a different amount than what gets reported to the caller.
-        Returns the amount actually applied (0.0 if there was nothing to apply).
-        """
-        with self.lock:
-            gallons = self.dropped_burn_estimate_gal
-            if gallons <= 0:
-                return 0.0
-            self.apply_dropped_burn(gallons)
-            return gallons
-
-    def get_status(self):
-        """Get current fuel status for API response."""
-        with self.lock:
-            efficiency = self.get_cruise_efficiency()
-            warnings = self.check_warnings()
-
-            result = {
-                'fuel_remaining': round(self.fuel_remaining, 1),
-                'flight_fuel_used': round(self.flight_fuel_used, 1),
-                'total_since_fill': round(self.total_since_fill, 1),
-                'engine_running': self.engine_running,
-                'last_updated': self.last_updated,
-                # Key name kept for the client JSON contract; value is now the full
-                # 36 gal aircraft capacity ("usable capacity" is deprecated).
-                'capacity': FUEL_CONFIG['capacity_gal'],
-                'warnings': warnings,
-                # EDM fuel tank readings
-                'edm_fuel_total': round(self.edm_fuel_total, 1),
-                'edm_fuel_left': round(self.edm_fuel_left, 1),
-                'edm_fuel_right': round(self.edm_fuel_right, 1),
-                'dropped_burn_estimate_gal': round(self.dropped_burn_estimate_gal, 2),
-            }
-
-            if efficiency:
-                result['cruise_efficiency'] = efficiency
-                result['endurance_hours'] = efficiency['endurance_hours']
-                result['range_nm'] = efficiency['range_remaining']
-            else:
-                # Estimate endurance from average fuel flow
-                avg_ff = 8.0  # Default cruise fuel flow
-                result['endurance_hours'] = round(self.fuel_remaining / avg_ff, 2) if avg_ff > 0 else 0
-                result['range_nm'] = round(self.fuel_remaining * 17, 0)  # Rough estimate
-
-            return result
-
-    def _maybe_save(self, current_time):
-        """Save if save_interval has elapsed."""
-        if current_time - self.last_save_time >= FUEL_CONFIG['save_interval']:
-            self._save_state()
-            self.last_save_time = current_time
-
-    def _save_state(self):
-        """Save state to fuel_data.json with backup rotation."""
-        try:
-            # Rotate backups
-            for i in range(4, 0, -1):
-                old_backup = f"{self.data_file}.{i}"
-                new_backup = f"{self.data_file}.{i+1}"
-                if os.path.exists(old_backup):
-                    shutil.move(old_backup, new_backup)
-
-            if os.path.exists(self.data_file):
-                shutil.copy2(self.data_file, f"{self.data_file}.1")
-
-            # Save current state
-            data = {
-                'version': 1,
-                'aircraft': {
-                    'fuel_capacity': FUEL_CONFIG['capacity_gal'],
-                    # DEPRECATED field, kept so existing fuel_data.json files keep the
-                    # same shape. Now identical to fuel_capacity.
-                    'usable_capacity': FUEL_CONFIG['capacity_gal']
-                },
-                'current_state': {
-                    'fuel_remaining': self.fuel_remaining,
-                    'last_updated': self.last_updated,
-                    'flight_fuel_used': self.flight_fuel_used,
-                    'total_since_fill': self.total_since_fill,
-                    'engine_running': self.engine_running,
-                    'dropped_burn_estimate_gal': self.dropped_burn_estimate_gal
-                },
-                'fuel_additions': self.fuel_additions[-100:],  # Keep last 100
-                'flight_history': self.flight_history[-50:],   # Keep last 50
-                'calibration': self.calibration.to_dict()
-            }
-
-            with open(self.data_file, 'w') as f:
-                json.dump(data, f, indent=2)
-
-        except Exception as e:
-            log(f"FuelTracker: Error saving state: {e}")
-
-    def _load_state(self):
-        """Load state from fuel_data.json."""
-        if not os.path.exists(self.data_file):
-            log("FuelTracker: No existing state file, starting fresh")
-            self.calibration.start_period()
-            return
-
-        try:
-            with open(self.data_file, 'r') as f:
-                data = json.load(f)
-
-            state = data.get('current_state', {})
-            self.fuel_remaining = state.get('fuel_remaining', 0.0)
-            self.last_updated = state.get('last_updated')
-            self.total_since_fill = state.get('total_since_fill', 0.0)
-            self.dropped_burn_estimate_gal = state.get('dropped_burn_estimate_gal', 0.0)
-            # Don't restore flight_fuel_used - start fresh each session
-            self.flight_fuel_used = 0.0
-            self.engine_running = False
-
-            self.fuel_additions = data.get('fuel_additions', [])
-            self.flight_history = data.get('flight_history', [])
-
-            if 'calibration' in data:
-                self.calibration.from_dict(data['calibration'])
-            else:
-                self.calibration.start_period()
-
-            log(f"FuelTracker: Loaded state - {self.fuel_remaining:.1f} gal remaining")
-
-        except Exception as e:
-            log(f"FuelTracker: Error loading state: {e}")
-            self.calibration.start_period()
 
 
 # Global state
@@ -777,8 +185,6 @@ class CaptureState:
         self.target_fuel_flow = 0  # Optimal fuel flow for cruise
         self.target_power = 0  # Recommended power setting
         self.target_mode = "---"  # Recommended mixture mode
-        # Fuel tracking (initialized in main() after CONFIG is finalized)
-        self.fuel_tracker = None
         # Serial connection health monitoring
         self.last_data_time = None  # Timestamp of last successful data read
         self.empty_read_count = 0  # Consecutive empty reads (ready but no data)
@@ -1092,7 +498,7 @@ def log(message):
 
 # Shared-secret token gating /api/upload (Finding 8: unauthenticated upload
 # endpoint). Self-provisions on first boot — no manual deploy step required —
-# and persists in DATA_DIR alongside fuel_data.json so it survives redeploys
+# and persists in DATA_DIR so it survives redeploys
 # of this script.
 UPLOAD_TOKEN_FILE = os.path.join(CONFIG['DATA_DIR'], '.upload_token')
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB — largest real upload target today
@@ -1860,20 +1266,6 @@ def capture_thread_func():
                         for msg in peak_log_msgs:
                             log(msg)
 
-                        # Update fuel tracker
-                        if state.fuel_tracker:
-                            ground_speed = state.ground_speed  # From Stratux or KML
-                            state.fuel_tracker.update(
-                                fuel_flow=fuel_flow,
-                                edm_timestamp=edm_timestamp,
-                                ground_speed=ground_speed,
-                                rpm=rpm,
-                                mp=mp,
-                                fuel_total=parsed.get('Fuel_Remaining', 0),
-                                fuel_left=parsed.get('Fuel_Left', 0),
-                                fuel_right=parsed.get('Fuel_Right', 0)
-                            )
-
                         # Write CSV row at 1Hz (throttle from ~4Hz serial rate)
                         now_csv = time.time()
                         if csv_file and now_csv - last_csv_time >= 1.0:
@@ -2224,8 +1616,6 @@ def get_status():
         # Manual ATIS values
         'manual_altimeter': state.manual_altimeter,
         'manual_oat': state.manual_oat,
-        # Fuel tracking
-        'fuel': state.fuel_tracker.get_status() if state.fuel_tracker else None,
     }
 
 def get_diagnostics():
@@ -2387,28 +1777,6 @@ class RequestHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self.send_json({'error': 'Help file not found'}, 404)
 
-        # Fuel tracking API endpoints
-        elif path == '/api/fuel':
-            if state.fuel_tracker:
-                self.send_json(state.fuel_tracker.get_status())
-            else:
-                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
-
-        elif path == '/api/fuel/history':
-            if state.fuel_tracker:
-                self.send_json({
-                    'fuel_additions': state.fuel_tracker.fuel_additions[-50:],
-                    'flight_history': state.fuel_tracker.flight_history[-20:]
-                })
-            else:
-                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
-
-        elif path == '/api/fuel/calibration':
-            if state.fuel_tracker:
-                self.send_json(state.fuel_tracker.calibration.get_calibration_status())
-            else:
-                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
-
         else:
             self.send_json({'error': 'Not found'}, 404)
 
@@ -2466,104 +1834,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                     'altimeter': state.manual_altimeter,
                     'oat': state.manual_oat
                 })
-            except (ValueError, json.JSONDecodeError) as e:
-                self.send_json({'error': str(e)}, 400)
-
-        # Fuel tracking POST endpoints
-        elif path == '/api/fuel/set':
-            if not state.fuel_tracker:
-                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
-                return
-            try:
-                content_length = int(self.headers.get('Content-Length', 0))
-                body = self.rfile.read(content_length).decode('utf-8')
-                data = json.loads(body) if body else {}
-                fuel_remaining = float(data.get('fuel_remaining', 0))
-                reason = data.get('reason', 'Manual set via API')
-                state.fuel_tracker.set_fuel(fuel_remaining, reason)
-                self.send_json({'success': True, 'fuel_remaining': state.fuel_tracker.fuel_remaining})
-            except (ValueError, json.JSONDecodeError) as e:
-                self.send_json({'error': str(e)}, 400)
-
-        elif path == '/api/fuel/add':
-            if not state.fuel_tracker:
-                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
-                return
-            try:
-                content_length = int(self.headers.get('Content-Length', 0))
-                body = self.rfile.read(content_length).decode('utf-8')
-                data = json.loads(body) if body else {}
-                gallons = float(data.get('gallons', 0))
-                airport = data.get('airport', '')
-                price_per_gallon = float(data['price_per_gallon']) if data.get('price_per_gallon') else None
-                notes = data.get('notes', '')
-                set_total = data.get('set_total', False)
-                include_in_calibration = data.get('include_in_calibration', True)
-
-                addition = state.fuel_tracker.add_fuel(
-                    gallons=gallons,
-                    airport=airport,
-                    price_per_gallon=price_per_gallon,
-                    notes=notes,
-                    set_total=set_total,
-                    include_in_calibration=include_in_calibration
-                )
-                self.send_json({'success': True, 'addition': addition, 'fuel_remaining': state.fuel_tracker.fuel_remaining})
-            except (ValueError, json.JSONDecodeError) as e:
-                self.send_json({'error': str(e)}, 400)
-
-        elif path == '/api/fuel/apply_dropped_burn':
-            # Applies THIS tracker's own dropped_burn_estimate_gal — deliberately
-            # ignores any amount the client might send. FlyTab's FuelTankState
-            # computes its own independent estimate from a different sample
-            # stream (Date.now() polling vs. the EDM serial timestamp here); the
-            # two can diverge, and applying FlyTab's number to the Pi's tracker
-            # would over- or under-correct it. Each tracker corrects itself with
-            # its own truth. A no-op (still 'success') if nothing is tracked.
-            if not state.fuel_tracker:
-                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
-                return
-            # apply_own_dropped_burn() reads-and-applies under one lock acquisition —
-            # reading dropped_burn_estimate_gal separately here would race the
-            # capture thread's concurrent update() calls (see PR #143 review).
-            applied_gal = round(state.fuel_tracker.apply_own_dropped_burn(), 2)
-            self.send_json({
-                'success': True,
-                'applied_gal': applied_gal,
-                'fuel_remaining': state.fuel_tracker.fuel_remaining,
-                'dropped_burn_estimate_gal': state.fuel_tracker.dropped_burn_estimate_gal
-            })
-
-        elif path == '/api/fuel/dismiss_warning':
-            if state.fuel_tracker:
-                state.fuel_tracker.dismiss_warning()
-                self.send_json({'success': True, 'message': 'Fuel warning dismissed'})
-            else:
-                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
-
-        elif path == '/api/fuel/calibration/reset':
-            if state.fuel_tracker:
-                state.fuel_tracker.calibration.start_period()
-                state.fuel_tracker._save_state()
-                self.send_json({'success': True, 'message': 'Calibration period reset'})
-            else:
-                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
-
-        elif path == '/api/fuel/calibration/applied':
-            if not state.fuel_tracker:
-                self.send_json({'error': 'Fuel tracker not initialized'}, 500)
-                return
-            try:
-                content_length = int(self.headers.get('Content-Length', 0))
-                body = self.rfile.read(content_length).decode('utf-8')
-                data = json.loads(body) if body else {}
-                new_k_factor = int(data.get('new_k_factor', 0))
-                if new_k_factor <= 0:
-                    self.send_json({'error': 'Invalid K-factor'}, 400)
-                    return
-                state.fuel_tracker.calibration.apply_k_factor(new_k_factor)
-                state.fuel_tracker._save_state()
-                self.send_json({'success': True, 'message': f'K-factor {new_k_factor} recorded as applied'})
             except (ValueError, json.JSONDecodeError) as e:
                 self.send_json({'error': str(e)}, 400)
 
@@ -2748,10 +2018,6 @@ Examples:
         except ImportError:
             log("ERROR: pyserial not installed. Run: pip3 install pyserial")
             sys.exit(1)
-
-    # Initialize fuel tracker
-    state.fuel_tracker = FuelTracker(CONFIG['DATA_DIR'])
-    log(f"Fuel tracker initialized - {state.fuel_tracker.fuel_remaining:.1f} gal remaining")
 
     # Start Stratux/KML GPS thread (unless disabled)
     if not stratux_enabled and not CONFIG.get('KML_FILE'):

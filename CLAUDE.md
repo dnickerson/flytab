@@ -107,12 +107,12 @@ Home server (:8090)  ──HTTP──▶  map tiles, approach plates, NASR, CIFP
 
 ### Backend (`engine-monitor/`)
 
-- `engine_monitor.py` (v3.4.1) — HTTP server + WebSocket on Pi, parses EDM serial data.
+- `engine_monitor.py` (v3.5.0) — HTTP server + WebSocket on Pi, parses EDM serial data.
 - `data_simulator.py` — replays captured flight files as virtual serial for testing.
 
 #### Pi ↔ FlyTab contract version — bump discipline
 
-`engine_monitor.py`'s `get_status()` publishes `PI_API_CONTRACT` (currently 2) and `PI_CAPABILITIES` alongside `VERSION`. FlyTab's `web/shared/engine-client.js` reads `data.api_contract` and compares it against `EngineClient.MIN_PI_CONTRACT`; a Pi reporting older than that (or no field at all — treated as contract 0) gets a status-bar badge + an ENG-page banner naming both versions and telling the pilot to run `deploy-pi.sh`. See issue #113.
+`engine_monitor.py`'s `get_status()` publishes `PI_API_CONTRACT` (currently 3) and `PI_CAPABILITIES` alongside `VERSION`. Contract 3 removed the Pi fuel tracker (`FuelTracker`, every `/api/fuel/*` endpoint, the status `fuel` block and the `fuel_tracker` capability): fuel is tracked on the tablet, and the Pi only forwards the Dynon EMS fields (`Fuel_Flow`, `Fuel_Remaining`, `Fuel_Left`, `Fuel_Right`) in `data`. FlyTab's `web/shared/engine-client.js` reads `data.api_contract` and compares it against `EngineClient.MIN_PI_CONTRACT`; a Pi reporting older than that (or no field at all — treated as contract 0) gets a status-bar badge + an ENG-page banner naming both versions and telling the pilot to run `deploy-pi.sh`. See issue #113.
 
 **`VERSION` is for humans. `PI_API_CONTRACT` is what code compares — bump it whenever you change:**
 - a payload field name or nesting (e.g. `flight_fuel_used` moving under `fuel`)

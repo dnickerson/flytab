@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { ENGINE_FRAME, ENGINE_FRAME_NO_CONTRACT, ENGINE_FRAME_OLD_CONTRACT } = require('../fixtures/engine-messages.js');
+const { ENGINE_FRAME, ENGINE_FRAME_NO_CONTRACT, ENGINE_FRAME_OLD_CONTRACT, ENGINE_FRAME_CONTRACT_2 } = require('../fixtures/engine-messages.js');
 
 // ---------------------------------------------------------------------------
 // Browser globals that engine-client.js references at evaluation time.
@@ -140,10 +140,21 @@ describe('EngineClient — Pi contract handshake (#113)', () => {
     it('a current-contract Pi reports ok — no mismatch', () => {
         client._onData(ENGINE_FRAME);
         client._connected = true; // _onData alone doesn't flip this; onopen does
-        expect(client.piContract).toBe(2);
+        expect(client.piContract).toBe(3);
         expect(client.piVersion).toBe('3.4.0');
-        expect(client.piCapabilities).toEqual(['fuel_tracker', 'peak_egt']);
+        expect(client.piCapabilities).toEqual(['peak_egt', 'gps_fix_quality']);
         expect(client.piContractOld).toBe(false);
+    });
+
+    it('requires contract 3 (Pi fuel tracker removed)', () => {
+        expect(EngineClient.MIN_PI_CONTRACT).toBe(3);
+    });
+
+    it('a contract-2 Pi (not redeployed since the fuel tracker was removed) is flagged old', () => {
+        client._onData(ENGINE_FRAME_CONTRACT_2);
+        client._connected = true;
+        expect(client.piContract).toBe(2);
+        expect(client.piContractOld).toBe(true);
     });
 
     it('a missing api_contract field is treated as contract 0 and flagged old, not silently accepted', () => {

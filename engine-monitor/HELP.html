@@ -435,71 +435,15 @@
     </div>
 
     <div class="section">
-        <div class="section-header" onclick="toggleSection(this)">Fuel Tracking</div>
+        <div class="section-header" onclick="toggleSection(this)">Fuel</div>
         <div class="section-content">
-            <p>The fuel tracker integrates fuel flow over time to track remaining fuel.</p>
-
-            <h3 style="margin: 15px 0 10px;">Fuel Display</h3>
-            <table>
-                <tr><td>REMAINING</td><td>Current fuel in tanks (gallons)</td></tr>
-                <tr><td>USED (FLIGHT)</td><td>Fuel consumed this flight (resets on engine start)</td></tr>
-                <tr><td>ENDURANCE</td><td>Estimated flight time remaining (H:MM)</td></tr>
-                <tr><td>RANGE</td><td>Estimated range in nautical miles</td></tr>
-            </table>
-
-            <h3 style="margin: 15px 0 10px;">How Calculations Work</h3>
-
-            <p><strong>Fuel Remaining:</strong></p>
-            <div class="formula">Remaining = Previous Remaining − (Fuel Flow × Time Elapsed)</div>
-            <p>Fuel flow (GPH) is integrated over time using EDM timestamps (1/64 second precision).
-               Each data sample (~4 Hz) calculates fuel consumed since last sample.</p>
-
-            <p style="margin-top:15px;"><strong>Flight Fuel Used:</strong></p>
-            <div class="formula">Used = Σ (Fuel Flow × dt) since engine start</div>
-            <p>Resets to zero when engine starts (RPM &gt; 500). Accumulates all fuel consumed during the flight.</p>
-
-            <p style="margin-top:15px;"><strong>Endurance:</strong></p>
-            <div class="formula">Endurance (hours) = Fuel Remaining ÷ Avg Fuel Flow</div>
-            <p>Uses rolling 5-minute average of fuel flow during cruise. If not in cruise, defaults to 8.0 GPH estimate.</p>
-
-            <p style="margin-top:15px;"><strong>Range:</strong></p>
-            <div class="formula">Range (nm) = Fuel Remaining × (Ground Speed ÷ Fuel Flow)</div>
-            <p>Uses actual ground speed from Stratux GPS and average cruise fuel flow.
-               Simplified: <code>Range = Fuel Remaining × nm/gal</code></p>
-
-            <p style="margin-top:15px;"><strong>Cruise Efficiency (nm/gal):</strong></p>
-            <div class="formula">nm/gal = Ground Speed (kts) ÷ Fuel Flow (GPH)</div>
-            <p>Calculated from 5-minute rolling average during cruise conditions
-               (RPM 2000-2600, MP 18-26", GS &gt; 80 kts).</p>
-
-            <h3 style="margin: 15px 0 10px;">Adding/Editing Fuel</h3>
-            <ol>
-                <li>Click <strong>"+ ADD FUEL"</strong> button</li>
-                <li>Enter gallons amount</li>
-                <li>Choose mode:
-                    <ul>
-                        <li><strong>Add gallons to current</strong> - Adds to existing fuel (use negative to subtract)</li>
-                        <li><strong>Set total fuel to this amount</strong> - Sets exact fuel quantity</li>
-                    </ul>
-                </li>
-                <li>Optionally enter airport, price, and notes</li>
-                <li>Click <strong>SAVE</strong></li>
-            </ol>
-
-            <h3 style="margin: 15px 0 10px;">Fuel Bar Colors</h3>
-            <table>
-                <tr><td class="good">Green</td><td>Above 8 gallons (&gt;24%)</td></tr>
-                <tr><td class="warning">Yellow</td><td>4-8 gallons (12-24%)</td></tr>
-                <tr><td class="danger">Red</td><td>Below 4 gallons (&lt;12%) - CRITICAL</td></tr>
-            </table>
-
+            <p>Fuel on board is tracked by FlyTab on the tablet (tic-mark measurements, fuel stops,
+               fuel flow). The engine monitor no longer keeps its own fuel tracker: it only forwards
+               the Dynon D-180's fuel flow, fuel remaining and left/right tank levels, which are shown
+               and recorded as received.</p>
             <div class="alert-box alert-danger" style="margin-top:15px;">
-                <strong>IMPORTANT:</strong> Fuel tracking is an ESTIMATE based on fuel flow sensor data.
-                Always verify fuel quantity visually before flight. Do not rely solely on electronic fuel tracking.
-            </div>
-
-            <div class="alert-box alert-info" style="margin-top:10px;">
-                <strong>TIP:</strong> Fuel state is automatically saved every 60 seconds and persists across restarts.
+                <strong>IMPORTANT:</strong> Electronic fuel figures are estimates.
+                Always verify fuel quantity visually before flight.
             </div>
         </div>
     </div>
@@ -554,60 +498,7 @@
         </div>
     </div>
 
-    <div class="section collapsed">
-        <div class="section-header" onclick="toggleSection(this)">Fuel Warnings</div>
-        <div class="section-content">
-            <div class="alert-box alert-warning">
-                <strong>LOW FUEL WARNING (8 gal)</strong><br>
-                Yellow alert appears when fuel remaining drops to 8 gallons or less.
-            </div>
 
-            <div class="alert-box alert-danger" style="margin-top:10px;">
-                <strong>CRITICAL FUEL WARNING (4 gal)</strong><br>
-                Red alert appears when fuel remaining drops to 4 gallons or less.
-                Land immediately at nearest suitable airport.
-            </div>
-
-            <div class="alert-box alert-warning" style="margin-top:10px;">
-                <strong>LOW ENDURANCE WARNING (45 min)</strong><br>
-                Appears when calculated endurance drops below 45 minutes based on
-                current fuel consumption rate.
-            </div>
-
-            <p style="margin-top:15px;">Click <strong>Dismiss</strong> to hide warnings for this flight.</p>
-        </div>
-    </div>
-
-    <div class="section collapsed">
-        <div class="section-header" onclick="toggleSection(this)">K-Factor Calibration</div>
-        <div class="section-content">
-            <p>The K-factor calibrates the EI FT-60 Red Cube fuel flow sensor for accuracy.</p>
-
-            <h3 style="margin: 15px 0 10px;">How It Works</h3>
-            <ol>
-                <li>System tracks actual fuel added (from pump)</li>
-                <li>Compares to computed fuel used (from flow sensor)</li>
-                <li>After 30+ gallons, calculates suggested K-factor adjustment</li>
-            </ol>
-
-            <div class="formula" style="margin: 15px 0;">
-                K-factor Ratio = Computed Used ÷ Actual Added<br>
-                Suggested K = Current K × Ratio
-            </div>
-
-            <h3 style="margin: 15px 0 10px;">Calibration API</h3>
-            <table>
-                <tr><td><code>/api/fuel/calibration</code></td><td>View calibration status</td></tr>
-                <tr><td><code>/api/fuel/calibration/reset</code></td><td>Start new calibration period</td></tr>
-                <tr><td><code>/api/fuel/calibration/applied</code></td><td>Record K-factor applied to Dynon</td></tr>
-            </table>
-
-            <div class="alert-box alert-info" style="margin-top:15px;">
-                <strong>DEFAULT K-FACTOR:</strong> 68000<br>
-                Adjust in Dynon EMS settings based on calibration recommendations.
-            </div>
-        </div>
-    </div>
 
     <a href="/" class="back-btn">← Back to Engine Monitor</a>
 

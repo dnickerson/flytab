@@ -22,8 +22,8 @@ function makeFrame() {
   const gallons = parseFloat(Math.max(0, 24.9 - t / 3600 * ff).toFixed(1));
   return {
     version:              '3.4.0',
-    api_contract:          2,
-    capabilities:         ['fuel_tracker', 'sticky_valve', 'peak_egt'],
+    api_contract:          3,
+    capabilities:         ['sticky_valve', 'peak_egt'],
     capturing:            true,
     serial_connected:     true,
     stratux_connected:    false,
@@ -44,7 +44,6 @@ function makeFrame() {
     peaks_valid:          false,
     manual_altimeter:     null,
     manual_oat:           null,
-    fuel:                 null,
     data: {
       RPM:        rpm,
       MP:         parseFloat((24.5 + Math.cos(t / 25) * 0.5).toFixed(1)),
