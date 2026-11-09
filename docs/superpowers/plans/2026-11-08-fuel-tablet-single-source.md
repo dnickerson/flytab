@@ -135,14 +135,14 @@
 - Modify: `engine-monitor/engine_monitor.py`: delete `FUEL_CONFIG` (~115-149), `KFactorCalibration` (151-241), `FuelTracker` (244-~720), `state.fuel_tracker` (781, 2753-2754), the update call in the serial loop (~1863-1875), the status `'fuel'` key (2228), the `/api/fuel` GET routes (2391-2410) and POST routes (2473-2568); `PI_API_CONTRACT = 3` with a comment line naming this change; `PI_CAPABILITIES` without `"fuel_tracker"`.
 - Delete: `engine-monitor/test_fuel_tracker.py`.
 - Modify: `web/shared/engine-client.js:81` `MIN_PI_CONTRACT = 3`.
-- Test: `engine-monitor/test_status_contract.py` (new, plain `python3 -m pytest` or `unittest`, whichever the existing Pi tests use); `tests/shared/engine-client.test.js` (contract).
+- Test: `engine-monitor/test_status_contract.py` (new, stdlib `unittest` like the deleted `test_fuel_tracker.py`); `tests/shared/engine-client.test.js` (contract).
 
 **Interfaces:** Consumes Tasks 1-5 (nothing on the tablet reads `data.fuel` or `/api/fuel/*` — verified by grep in Step 2). Produces: status JSON has no `fuel` key; `api_contract: 3`; `capabilities` = `["peak_egt", "gps_fix_quality"]`; `data.Fuel_Remaining`, `Fuel_Left`, `Fuel_Right`, `Fuel_Flow` unchanged.
 
 - [ ] **Step 1: Failing tests:** Pi — `test_status_has_no_fuel_block` (`'fuel' not in get_status()`), `test_contract_is_3`, `test_capabilities_drop_fuel_tracker`, `test_dynon_fuel_fields_still_parsed` (a real EMS line from an existing fixture → `Fuel_Remaining`, `Fuel_Left`, `Fuel_Right`, `Fuel_Flow` present), `test_fuel_endpoints_gone` (`/api/fuel`, `/api/fuel/set` → 404). Tablet — `MIN_PI_CONTRACT === 3`, and a contract-2 Pi shows the update badge (`piContractBehind`).
 - [ ] **Step 2: Run** them — FAIL. Also `git grep -n "data\.fuel\|/api/fuel\|fuel_tracker" web/ tests/` → only the lines this task deletes.
 - [ ] **Step 3: Implement** the deletions and bumps. Do not touch `parse_line`, `Fuel_Flow` handling, `state.sfc`/peak-EGT code, or `FIELD_NAMES`. Leave the Pi's old `fuel_data.json` files in place (unused; no data loss).
-- [ ] **Step 4: Run** — Pi tests PASS (`cd engine-monitor && python3 -m pytest -q`), `npm test` PASS.
+- [ ] **Step 4: Run** — Pi tests PASS (`python3 -m unittest discover -s engine-monitor -p "test_*.py"`), `npm test` PASS.
 - [ ] **Step 5: Commit** `feat(pi): remove the Pi fuel tracker (contract 3)`; CLAUDE.md "Pi ↔ FlyTab contract" paragraph updated (currently 3, fuel tracker removed); manual line(s) that mention the Pi's fuel tracker. **Deploy note for Dana:** run `bash deploy-pi.sh` after installing this build — until then the status bar shows the Pi-update badge (contract 2 < 3), and nothing fuel-related depends on the Pi any more. Bump version; `bash build.sh`.
 
 ---
