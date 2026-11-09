@@ -6396,6 +6396,21 @@ body.fs-overlay-open .radar-loop-controls {
     min-height: 18px;
     line-height: 1.4;
 }
+/* Excluded-legs count: its own light chip so the design tokens stay readable on the
+   panel's dark legacy background. */
+.fo-kfactor-excluded {
+    background: var(--bg-surface);
+    color: var(--color-caution-on-light);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 800;
+    text-align: center;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
 .fo-kfactor-note {
     font-size: 11px;
     color: #7eb8e8;

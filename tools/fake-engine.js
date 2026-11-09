@@ -53,7 +53,7 @@ function makeFrame() {
       Volts:      13.7,
       Amps:       34,
       Fuel_Flow:  ff,
-      Gallons_Rem: gallons,
+      Fuel_Remaining: gallons,   // the Pi's real field name (engine_monitor.py parse_line)
       Fuel_L1:    parseFloat((gallons * 0.55).toFixed(1)),
       Fuel_L2:    parseFloat((gallons * 0.45).toFixed(1)),
       EGT1: Math.round(1350 + Math.sin(t / 20) * 30),

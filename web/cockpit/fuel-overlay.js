@@ -5,6 +5,13 @@
  */
 
 class FuelOverlay {
+    /** K-factor: a leg whose tracked burn is more than this fraction off its actual
+     *  burn is excluded (Ruling 15d). */
+    static KF_OUTLIER_FRAC = 0.25;
+    /** K-factor: the New K-Factor guidance needs at least this much actual burn over
+     *  the counted legs (Ruling 16). */
+    static KF_MIN_ACTUAL_GAL = 30;
+
     constructor(container) {
         this._container = container;
         this._el = null;
@@ -214,10 +221,15 @@ class FuelOverlay {
                     </div>
                 </div>
                 <div class="fo-kfactor-guidance" id="fo-kf-guidance"></div>
+                <div class="fo-kfactor-excluded" id="fo-kf-excluded" style="display:none;"></div>
                 <div class="fo-kfactor-note">
                     Ratio = Tracked used ÷ Actual used, over the legs between tic measurements. Tracked burn
-                    is integrated from the D-180 fuel-flow reading; the D-180 K-factor is pulses per gallon,
-                    so New K-factor = Current K-factor × Ratio (tracked higher than actual → increase it).
+                    is integrated from the D-180 fuel-flow reading.
+                    Dynon's rule (FlightDEK-D180 Installation Guide, p. 6-14):
+                    if GALS USED reads higher than you expect, increase the K-factor. So
+                    New K-factor = Current K-factor × Ratio. A leg counts only with fuel tracked the whole way
+                    (no SET or CONFIRM in between, not unconfirmed) and tracked within 25% of actual; the
+                    change is suggested once the counted legs add up to 30 gal.
                 </div>
             </div>
         </div>`;
@@ -263,6 +275,7 @@ class FuelOverlay {
             kfUsed:    this._el.querySelector('#fo-kf-used'),
             kfRatio:   this._el.querySelector('#fo-kf-ratio'),
             kfGuidance: this._el.querySelector('#fo-kf-guidance'),
+            kfExcluded: this._el.querySelector('#fo-kf-excluded'),
         };
 
         // Wire close
@@ -493,7 +506,10 @@ class FuelOverlay {
      * 0.1 gal like a measurement's total_gal. Null when nothing is tracked. A manual
      * override is deliberately NOT used here: it is a pilot entry, not a measurement.
      * `stale` reuses FuelState.getCurrentFuel()'s rule (FuelTankState.needsConfirmation()).
-     * @returns {{gal: number, stale: boolean}|null}
+     * `since` is the FuelTankState init this figure counts from (initialized_at);
+     * `droppedApplied` the dropped-burn corrections applied since then (0 when the
+     * stored state predates that field).
+     * @returns {{gal: number, stale: boolean, since: (string|null), droppedApplied: number}|null}
      */
     _trackedTotal() {
         try {
@@ -504,7 +520,10 @@ class FuelOverlay {
             if (!Number.isFinite(gal)) return null;
             let stale = false;
             try { stale = !!FuelTankState.needsConfirmation(); } catch (_) { stale = false; }
-            return { gal, stale };
+            const since = st.initialized_at ?? null;
+            const droppedApplied = (typeof st.dropped_applied_since_init_gal === 'number' &&
+                Number.isFinite(st.dropped_applied_since_init_gal)) ? st.dropped_applied_since_init_gal : 0;
+            return { gal, stale, since, droppedApplied };
         } catch (_) { return null; }
     }
 
@@ -623,6 +642,7 @@ class FuelOverlay {
             if (typeof FuelTankState !== 'undefined') {
                 const existing = FuelTankState.getState();
                 FuelTankState.init(m.left_gal, m.right_gal, existing?.active_tank ?? 'L');
+                m.tank_init_at = FuelTankState.getState()?.initialized_at ?? null;
                 // Belt-and-suspenders: re-dispatch so the gauge widget re-renders even
                 // if the synchronous dispatch inside init() was swallowed by the WebView.
                 window.dispatchEvent(new CustomEvent('fueltankstate:changed'));
@@ -645,6 +665,12 @@ class FuelOverlay {
      * re-initialises FuelTankState; edm_gal is the D-180's own fuel figure when
      * fresh, else null. variance_gal / variance_pct / accuracy grade the tic
      * against tracked_gal, as the comparison block shows.
+     * For the K-factor (all read with tracked_gal, before the re-init):
+     *   tracked_since  — FuelTankState.initialized_at that tracked_gal counts from
+     *   tracked_stale  — tracked_gal was unconfirmed (needsConfirmation())
+     *   dropped_applied_since_init_gal — applied dropped-burn gallons inside tracked_gal
+     * (null / null / 0 when nothing is tracked). The caller adds tank_init_at, the
+     * init this measurement creates, after FuelTankState.init().
      */
     _createRecordedMeasurement() {
         const tracked = this._trackedTotal();
@@ -659,20 +685,27 @@ class FuelOverlay {
             }
         }
         m.tracked_gal = tracked ? tracked.gal : null;
+        m.tracked_since = tracked ? tracked.since : null;
+        m.tracked_stale = tracked ? tracked.stale : null;
+        m.dropped_applied_since_init_gal = tracked ? tracked.droppedApplied : 0;
+        m.tank_init_at = null;
         m.edm_gal = this._resolveD180Fuel();
         return m;
     }
 
     /**
      * The Dynon D-180's own fuel-remaining figure (data.Fuel_Remaining) from a fresh
-     * engine panel (polled within FuelState.EDM_FRESHNESS_MS), else null. Synchronous:
-     * no file-server or CSV lookup, so APPLY TIC never waits on the network.
+     * engine panel (polled within FuelState.EDM_FRESHNESS_MS) whose frame carries a
+     * current EDM row (EngineClient.edmCurrent: the Pi keeps resending its last row
+     * after the EDM goes quiet), else null. Synchronous: no file-server or CSV
+     * lookup, so APPLY TIC never waits on the network.
      */
     _resolveD180Fuel() {
         try {
             const panel = window.enginePanel;
             if (panel && panel.lastData && panel.lastPollTime &&
-                (Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS) {
+                (Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS &&
+                (typeof EngineClient === 'undefined' || EngineClient.edmCurrent(panel.lastData))) {
                 const val = FuelEngine.extractEdmFuel(panel.lastData);
                 if (val > 0) return val;
             }
@@ -750,6 +783,9 @@ class FuelOverlay {
             const existingTank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
             if (typeof FuelTankState !== 'undefined') {
                 FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L');
+                m.tank_init_at = FuelTankState.getState()?.initialized_at ?? null;
+            } else {
+                m.tank_init_at = null;
             }
             FuelState.saveMeasurement(m);
             this._syncMeasurement({ ...m, fuel_stop_gal: gallons });
@@ -975,15 +1011,27 @@ class FuelOverlay {
     /**
      * K-factor check from consecutive history entries (prev, next), sorted by time:
      *   actual used  = prev.total_gal − (next.total_gal − next.fuel_stop_gal)
-     *   tracked used = prev.total_gal − next's tracked figure (taken before next's tic)
-     * fuel_stop_gal is 0 for an APPLY TIC entry. A pair counts only when both are
-     * finite and positive and no LEGACY fuel stop (a flytab_fuel_stops record with no
-     * matching history entry, i.e. recorded before stops were written to history)
-     * lies between the two: its fill is unknown to the pair.
-     * Ratio = Σtracked ÷ Σactual. The D-180 K-factor is pulses per gallon (FlightDEK-
-     * D180 Installation Guide, EMS Configuration → Fuel Flow: "if your GALS USED
-     * reads higher than you expect, increase the K-factor"), so
-     * New K = Current K × Ratio.
+     *   tracked used = prev.total_gal − next.tracked_gal − next.dropped_applied_since_init_gal
+     *                  (flow-integrated burn only: an applied dropped-burn correction is
+     *                  an estimate and is added back)
+     * fuel_stop_gal is 0 for an APPLY TIC entry. Each leg is counted or excluded, in
+     * this order (the first rule that applies names the exclusion):
+     *   older      — next has no tracked_since key, prev no tank_init_at key (saved
+     *                before these checks), or a LEGACY fuel stop (a flytab_fuel_stops
+     *                record with no matching history entry) lies between them
+     *   unusable   — a figure is missing / not finite (incl. nothing tracked)
+     *   reset      — next.tracked_since is not the init prev created (prev.tank_init_at):
+     *                the tracker was SET / CONFIRMed in between
+     *   unconfirmed — next's tracked figure was stale (next.tracked_stale)
+     *   unusable   — actual or tracked used is not positive (e.g. the tic rose with no
+     *                fuel stop recorded)
+     *   outlier    — |tracked ÷ actual − 1| > KF_OUTLIER_FRAC (e.g. a partial top-off
+     *                recorded with APPLY TIC instead of RECORD FUEL STOP)
+     * Ratio = Σtracked ÷ Σactual over counted legs. Dynon's rule (FlightDEK-D180
+     * Installation Guide p. 6-14: "if your GALS USED reads higher than you expect,
+     * increase the K-factor"), so New K = Current K × Ratio.
+     * @returns {{actual: number, tracked: number, pairs: number,
+     *            excluded: {older: number, unusable: number, reset: number, unconfirmed: number, outlier: number}}}
      */
     _computeKFactor() {
         const toMs = (v) => {
@@ -1000,12 +1048,19 @@ class FuelOverlay {
 
         const entries = history.filter(m => m && typeof m === 'object').map(m => {
             const stopGal = Number(m.fuel_stop_gal);
+            const dropped = Number(m.dropped_applied_since_init_gal);
             return {
                 ts: toMs(m.measured_at) ?? (Number.isFinite(m.ts) ? m.ts : 0),
                 tic: m.total_gal,
                 ref: m[this._historyRefField(m)],
                 stopGal: Number.isFinite(stopGal) && stopGal > 0 ? stopGal : 0,
                 isStop: m.fuel_stop_gal != null,
+                hasSince: 'tracked_since' in m,
+                since: m.tracked_since ?? null,
+                hasInit: 'tank_init_at' in m,
+                initAt: m.tank_init_at ?? null,
+                stale: m.tracked_stale === true,
+                dropped: Number.isFinite(dropped) && dropped > 0 ? dropped : 0,
             };
         }).sort((a, b) => a.ts - b.ts);
 
@@ -1020,28 +1075,57 @@ class FuelOverlay {
             if (!stopEntryTimes.some(e => Math.abs(e - t) <= MATCH_MS)) legacyStopTimes.push(t);
         }
 
+        const excluded = { older: 0, unusable: 0, reset: 0, unconfirmed: 0, outlier: 0 };
         let actual = 0, tracked = 0, pairs = 0;
         for (let i = 1; i < entries.length; i++) {
             const prev = entries[i - 1];
             const next = entries[i];
-            if (!Number.isFinite(prev.tic) || !Number.isFinite(next.tic) || !Number.isFinite(next.ref)) continue;
+            if (!next.hasSince || !prev.hasInit ||
+                legacyStopTimes.some(st => st > prev.ts && st < next.ts)) { excluded.older++; continue; }
+            if (!Number.isFinite(prev.tic) || !Number.isFinite(next.tic) || !Number.isFinite(next.ref)) {
+                excluded.unusable++; continue;
+            }
+            if (prev.initAt == null || next.since !== prev.initAt) { excluded.reset++; continue; }
+            if (next.stale) { excluded.unconfirmed++; continue; }
             const a = prev.tic - (next.tic - next.stopGal);
-            const t = prev.tic - next.ref;
-            if (!(a > 0) || !(t > 0)) continue;
-            if (legacyStopTimes.some(st => st > prev.ts && st < next.ts)) continue;
+            const t = prev.tic - next.ref - next.dropped;
+            if (!(a > 0) || !(t > 0)) { excluded.unusable++; continue; }
+            if (Math.abs(t / a - 1) > FuelOverlay.KF_OUTLIER_FRAC) { excluded.outlier++; continue; }
             actual += a;
             tracked += t;
             pairs++;
         }
-        return { actual, tracked, pairs };
+        return { actual, tracked, pairs, excluded };
+    }
+
+    /** "N legs excluded: …" for the K-factor panel, or '' when none were. */
+    _kFactorExcludedText(excluded) {
+        const parts = [
+            [excluded.reset, 'tracker reset', 'tracker resets'],
+            [excluded.unconfirmed, 'unconfirmed', 'unconfirmed'],
+            [excluded.outlier, `more than ${Math.round(FuelOverlay.KF_OUTLIER_FRAC * 100)}% off`,
+                `more than ${Math.round(FuelOverlay.KF_OUTLIER_FRAC * 100)}% off`],
+            [excluded.unusable, 'unusable reading', 'unusable readings'],
+            [excluded.older, 'recorded before this check', 'recorded before this check'],
+        ].filter(([n]) => n > 0);
+        const total = parts.reduce((sum, [n]) => sum + n, 0);
+        if (total === 0) return '';
+        return `${total} ${total === 1 ? 'leg' : 'legs'} excluded: ` +
+            parts.map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(', ');
     }
 
     _renderKFactor() {
         if (!this._dom.kfFilled) return;
-        const { actual, tracked, pairs } = this._computeKFactor();
+        const { actual, tracked, pairs, excluded } = this._computeKFactor();
 
         this._dom.kfFilled.textContent = pairs > 0 ? actual.toFixed(1) + ' gal' : '-- gal';
         this._dom.kfUsed.textContent = pairs > 0 ? tracked.toFixed(1) + ' gal' : '-- gal';
+
+        if (this._dom.kfExcluded) {
+            const txt = this._kFactorExcludedText(excluded);
+            this._dom.kfExcluded.textContent = txt;
+            this._dom.kfExcluded.style.display = txt ? '' : 'none';
+        }
 
         if (pairs > 0) {
             const ratio = tracked / actual;
@@ -1050,11 +1134,18 @@ class FuelOverlay {
             const dev = Math.abs(ratio - 1.0);
             this._dom.kfRatio.className = 'fo-kfactor-val fo-kfactor-ratio ' +
                 (dev < 0.05 ? 'fo-kf-good' : dev < 0.10 ? 'fo-kf-warn' : 'fo-kf-bad');
-            this._dom.kfGuidance.textContent =
-                `New K-Factor = Current K-Factor × ${ratio.toFixed(3)}` +
-                (ratio > 1.0 ? '  (increase K-factor — tracked burn higher than actual)'
-                    : ratio < 1.0 ? '  (decrease K-factor — tracked burn lower than actual)'
-                    : '  (K-factor accurate)');
+            // Compare with the displayed (0.1 gal) figure so the text and the number agree.
+            if (Math.round(actual * 10) / 10 < FuelOverlay.KF_MIN_ACTUAL_GAL) {
+                this._dom.kfGuidance.textContent =
+                    `Ratio for reference only — needs more data (${actual.toFixed(1)} of ` +
+                    `${FuelOverlay.KF_MIN_ACTUAL_GAL} gal) before changing the K-factor`;
+            } else {
+                this._dom.kfGuidance.textContent =
+                    `New K-Factor = Current K-Factor × ${ratio.toFixed(3)}` +
+                    (ratio > 1.0 ? '  (increase K-factor — tracked burn higher than actual)'
+                        : ratio < 1.0 ? '  (decrease K-factor — tracked burn lower than actual)'
+                        : '  (K-factor accurate)');
+            }
         } else {
             this._dom.kfRatio.textContent = '--';
             this._dom.kfRatio.className = 'fo-kfactor-val fo-kfactor-ratio';

@@ -45,6 +45,12 @@ describe('FlightRecorder._recordRow Gallons Remaining', () => {
         expect(cell(21.4, 'tank_state')).toBe('21.4');
     });
 
+    it('rounds the tracked total to 0.1 gal, written like the old column (no trailing .0)', () => {
+        expect(cell(21.43719, 'tank_state')).toBe('21.4');
+        expect(cell(14.96, 'tank_state')).toBe('15');
+        expect(cell(0.04, 'tank_state')).toBe('0');
+    });
+
     it('logs an exact-zero tracked total (tank empty is a real value)', () => {
         expect(cell(0, 'tank_state')).toBe('0');
     });

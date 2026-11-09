@@ -539,8 +539,9 @@ class EnginePage {
         // The Dynon D-180's own fuel computer (EMS serial field 12, Fuel_Remaining).
         // Used ONLY by the TIC vs D-180 cross-check row below, whose whole purpose is to
         // surface disagreement between the tic-mark measurement and the D-180 — it must
-        // stay a D-180 read.
-        const edmFuelRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
+        // stay a D-180 read. Same reader as the fuel overlay (FuelEngine.extractEdmFuel:
+        // Fuel_Remaining only, 0 when absent); _updateTicEdm treats 0 as unavailable.
+        const edmFuelRem = FuelEngine.extractEdmFuel(d);
         // USED = gallons burned since the last tic measurement / fuel stop, from the
         // tablet's FuelTankState (not the Pi tracker). Three states: nothing tracked
         // ('--.-'), tracked state saved before the counter existed ('\u2014' - unknown,

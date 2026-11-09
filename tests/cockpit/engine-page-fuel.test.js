@@ -371,6 +371,18 @@ describe('EnginePage TIC vs D-180 row — still compares against the D-180, not 
         expect(out.edmTotal).toBe('30.0');
     });
 
+    it('reads the D-180 figure the way FuelEngine.extractEdmFuel does (Fuel_Remaining), not gallons_rem / Gallons_Rem', () => {
+        setup({ tankL: 10, tankR: 8, measurement: { total_gal: 29.0 } });
+        const out = fuelFields({ gallons_rem: 50, Gallons_Rem: 50, fuel_remaining_gal: 50, Fuel_Remaining: 30, fuel_flow: 0 });
+        expect(out.edmTotal).toBe('30.0');
+    });
+
+    it('a Gallons_Rem alias without Fuel_Remaining is not a D-180 figure (row hidden)', () => {
+        setup({ tankL: 10, tankR: 8, measurement: { total_gal: 29.0 } });
+        const out = fuelFields({ Gallons_Rem: 50, fuel_remaining: 50, fuel_flow: 0 });
+        expect(out.ticRowShown).toBe(false);
+    });
+
     it('hides the row when the EDM reports no fuel figure', () => {
         setup({ tankL: 10, tankR: 8, measurement: { total_gal: 29.0 } });
         const out = fuelFields({ Fuel_Remaining: 0, fuel_flow: 0 });

@@ -77,6 +77,41 @@ describe('FuelTankState', () => {
         });
     });
 
+    describe('dropped_applied_since_init_gal', () => {
+        it('is 0 at init, adds each applied correction, not refused ones or flow burn; init resets it', () => {
+            const FuelTankState = freshFuelTankState();
+            delete global.CockpitConfig;
+            FuelTankState.init(10, 10, 'L');
+            expect(FuelTankState.getState().dropped_applied_since_init_gal).toBe(0);
+            const t0 = Date.now();
+            FuelTankState._state.last_sample_at = new Date(t0).toISOString();
+            FuelTankState.onSample(9, t0 + 10000);
+            expect(FuelTankState.getState().dropped_applied_since_init_gal).toBe(0);
+            expect(FuelTankState.applyDroppedBurn(1.5)).toBe(true);
+            expect(FuelTankState.applyDroppedBurn(0.25)).toBe(true);
+            expect(FuelTankState.getState().dropped_applied_since_init_gal).toBeCloseTo(1.75, 9);
+            FuelTankState._state.dropped_burn_ambiguous = true;
+            expect(FuelTankState.applyDroppedBurn(1)).toBe(false);
+            expect(FuelTankState.getState().dropped_applied_since_init_gal).toBeCloseTo(1.75, 9);
+            FuelTankState.init(10, 10, 'L');
+            expect(FuelTankState.getState().dropped_applied_since_init_gal).toBe(0);
+        });
+
+        it('stays absent in state stored before the field existed', () => {
+            localStorage.clear();
+            const FuelTankState = new Function(`${src}\nreturn FuelTankState;`)();
+            delete global.CockpitConfig;
+            const now = new Date().toISOString();
+            localStorage.setItem('flytab_tank_state', JSON.stringify({
+                left_gal: 10, right_gal: 10, active_tank: 'L', tank_switched_at: now,
+                last_sample_at: now, requires_confirm: false, initialized_at: now,
+                imbalance: false, dropped_burn_estimate_gal: 1, dropped_burn_ambiguous: false,
+            }));
+            expect(FuelTankState.applyDroppedBurn(0.5)).toBe(true);
+            expect(FuelTankState.getState().dropped_applied_since_init_gal ?? null).toBeNull();
+        });
+    });
+
     describe('dropped_burn_estimate_gal', () => {
         it('accumulates the discarded portion of a long gap', () => {
             const FuelTankState = freshFuelTankState();

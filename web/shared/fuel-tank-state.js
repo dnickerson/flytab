@@ -103,6 +103,11 @@ class FuelTankState {
             // field; it is left absent (read as null, shown '—') rather than counted
             // from 0, which would understate the burn.
             burned_since_init_gal: 0,
+            // Gallons of pilot-applied dropped-burn corrections since this init()
+            // (applyDroppedBurn). They lower the tanks but are an estimate, not
+            // measured flow, so the K-factor calculator subtracts them out of the
+            // tracked burn. Absent in state stored before the field existed.
+            dropped_applied_since_init_gal: 0,
         };
         FuelTankState._loaded = true;
         FuelTankState._save();
@@ -262,6 +267,9 @@ class FuelTankState {
         if (!FuelTankState._state || FuelTankState._state.requires_confirm || !(gallons > 0)) return false;
         if (FuelTankState._state.dropped_burn_ambiguous) return false;
         if (!FuelTankState._debitActiveTank(gallons)) return false;
+        if (typeof FuelTankState._state.dropped_applied_since_init_gal === 'number') {
+            FuelTankState._state.dropped_applied_since_init_gal += gallons;
+        }
         FuelTankState._state.dropped_burn_estimate_gal =
             Math.max(0, (FuelTankState._state.dropped_burn_estimate_gal || 0) - gallons);
         FuelTankState._save();

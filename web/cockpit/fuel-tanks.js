@@ -11,6 +11,8 @@ class FuelTanksDisplay {
         this._el = null;
         this._dom = {};
         this._onEngineData = null;
+        this._onEngineGone = null;
+        this._onEngineStale = null;
         this._onStateChanged = null;
         this._onConfirmPrompt = null;
         this._confirmTimer = null;
@@ -35,8 +37,16 @@ class FuelTanksDisplay {
         this._buildDOM();
 
         this._onEngineData = (e) => this._handleEngineData(e.detail);
+        // No frames at all (Pi off, WiFi lost): EngineClient fires engine:stale
+        // {stale: true} after 5 s without data, or engine:disconnect. Flow is then
+        // unknown, so GPH and endurance take the "no flow" rendering ('--') instead
+        // of holding the last reading. The next engine:data frame restores them.
+        this._onEngineGone = () => this._clearFlow();
+        this._onEngineStale = (e) => { if (e?.detail?.stale) this._clearFlow(); };
         if (window.engineClient) {
             window.engineClient.addEventListener('engine:data', this._onEngineData);
+            window.engineClient.addEventListener('engine:stale', this._onEngineStale);
+            window.engineClient.addEventListener('engine:disconnect', this._onEngineGone);
         }
 
         this._onStateChanged = () => { this._render(); this._refreshOpenPanel(); };
@@ -74,8 +84,10 @@ class FuelTanksDisplay {
     hide() { if (this._el) { this._el.style.display = 'none'; try { localStorage.setItem('flypi_fuel_widget_visible', 'false'); } catch {} } }
 
     destroy() {
-        if (this._onEngineData && window.engineClient) {
-            window.engineClient.removeEventListener('engine:data', this._onEngineData);
+        if (window.engineClient) {
+            if (this._onEngineData) window.engineClient.removeEventListener('engine:data', this._onEngineData);
+            if (this._onEngineStale) window.engineClient.removeEventListener('engine:stale', this._onEngineStale);
+            if (this._onEngineGone) window.engineClient.removeEventListener('engine:disconnect', this._onEngineGone);
         }
         if (this._onStateChanged) window.removeEventListener('fueltankstate:changed', this._onStateChanged);
         if (this._onFuelStateChanged) window.removeEventListener('fuelstate:changed', this._onFuelStateChanged);
@@ -110,8 +122,14 @@ class FuelTanksDisplay {
         if (gph > 0 && edmCurrent) {
             FuelTankState.onSample(gph, Date.now());
         }
-        this._updateSenderDisplay(d);
+        this._updateSenderDisplay(d, edmCurrent);
         // Update endurance when GPH changes without a state change
+        this._renderEndurance();
+    }
+
+    /** Flow is unknown (no engine frames): GPH and endurance read '--'. */
+    _clearFlow() {
+        this._lastGph = 0;
         this._renderEndurance();
     }
 
@@ -518,7 +536,7 @@ class FuelTanksDisplay {
         this._dom.timerR.textContent = activeR ? label : '';
     }
 
-    _updateSenderDisplay(data) {
+    _updateSenderDisplay(data, edmCurrent = true) {
         // Raw EDM sender values — secondary reference only. Only meaningful (per this
         // aircraft's sender hardware) once tracked tank level drops to the configured
         // threshold; above it the sender reads an invalid/flat value and must not be
@@ -531,8 +549,10 @@ class FuelTanksDisplay {
         const trackedState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
         const threshold = this._senderAccurateBelowGal ?? 12;
 
-        const leftInRange = !trackedState || trackedState.left_gal <= threshold;
-        const rightInRange = !trackedState || trackedState.right_gal <= threshold;
+        // A frozen frame (the Pi resending its last row) is not a current sender
+        // reading: show the same 's:—' as an out-of-range sender.
+        const leftInRange = edmCurrent && (!trackedState || trackedState.left_gal <= threshold);
+        const rightInRange = edmCurrent && (!trackedState || trackedState.right_gal <= threshold);
 
         if (senderL != null) {
             this._dom.senderL.textContent = leftInRange ? 's:' + senderL.toFixed(1) : 's:\u2014';

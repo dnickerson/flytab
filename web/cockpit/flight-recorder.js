@@ -663,7 +663,8 @@ class FlightRecorder {
         try {
             const f = (typeof FuelState !== 'undefined') ? FuelState.getCurrentFuel() : null;
             if (f && (f.source === 'tank_state' || f.source === 'manual') && Number.isFinite(f.gallons)) {
-                tabletFuelGal = f.gallons;
+                // 0.1 gal, written as a plain number like the old Pi column ('21.4', '15').
+                tabletFuelGal = Math.round(f.gallons * 10) / 10;
             }
         } catch (_) { /* leave the cell empty */ }
 
