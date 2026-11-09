@@ -715,10 +715,12 @@ class RouteProfileView {
                     ? css.getPropertyValue('--color-caution-on-light').trim() || '#6b4a00'
                     : css.getPropertyValue('--text-muted').trim() || '#888888';
 
+            // Which forecast model the clouds come from ('RRFS' / 'GFS'), when the cache says.
+            const src = m.model ? `WX ${m.model}` : 'WX';
             let label;
             if (!m.covered)      label = 'WX: no data for ETA';
-            else if (m.estimated) label = `WX ${m.ageLabel} · valid now`;
-            else                  label = `WX ${m.ageLabel}`;
+            else if (m.estimated) label = `${src} ${m.ageLabel} · valid now`;
+            else                  label = `${src} ${m.ageLabel}`;
 
             this._wxChip.textContent  = label;
             this._wxChip.style.color  = colour;

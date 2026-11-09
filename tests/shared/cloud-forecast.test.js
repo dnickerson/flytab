@@ -1,5 +1,5 @@
 // tests/shared/cloud-forecast.test.js
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 
 // cloud-forecast.js is a classic script (no import/export). Load it in a
@@ -424,5 +424,142 @@ describe('cloudMergeContours', () => {
         }
         const bknOvcCells = r.cells.filter(c => c.cover === 'BKN' || c.cover === 'OVC');
         expect(r.contours.length).toBeLessThanOrEqual(bknOvcCells.length);
+    });
+});
+
+// ── Model: RRFS first, GFS fallback (2026-11-08) ─────────────────────────────
+// Open-Meteo drops HRRR (and gfs_hrrr's HRRR part) at the end of November 2026
+// and points to RRFS. RRFS covers CONUS only, so GFS is the fallback.
+describe('cloud model: RRFS (ncep_rrfs_conus) first, GFS (gfs_seamless) when RRFS fails or has no cloud data', () => {
+    const allNull = (json) => (Array.isArray(json) ? json : [json]).map((loc) => ({ ...loc,
+        hourly: Object.fromEntries(Object.entries(loc.hourly).map(([k, v]) => [k, k === 'time' ? v : v.map(() => null)])) }));
+    const store = () => { const s = new CloudForecastStore(); s._save = async (r) => { s._data = r; }; return s; };
+    let calls;
+    const answer = (byModel) => { calls = []; globalThis.fetch = async (url) => {
+        const m = new URL(url).searchParams.get('models'); calls.push(m);
+        const v = byModel[m];
+        if (v === undefined) throw new TypeError('Failed to fetch');
+        if (typeof v === 'number') return { ok: false, status: v, statusText: 'x', json: async () => ({ error: true }) };
+        return { ok: true, status: 200, json: async () => v };
+    }; };
+    afterEach(() => { delete globalThis.fetch; });
+
+    it('asks for RRFS by default; never gfs_hrrr', () => {
+        expect(new URL(cloudBuildUrl(FIX_POINTS)).searchParams.get('models')).toBe('ncep_rrfs_conus');
+        expect(cloudBuildUrl(FIX_POINTS)).not.toContain('hrrr');
+        expect(new URL(cloudBuildUrl(FIX_POINTS, 'gfs_seamless')).searchParams.get('models')).toBe('gfs_seamless');
+    });
+
+    it('RRFS answers: one request, the record says RRFS', async () => {
+        answer({ ncep_rrfs_conus: FIXTURE });
+        const rec = await store().fetchAndStore(FIX_POINTS);
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+        expect(rec.model).toBe('RRFS');
+    });
+
+    it('RRFS refuses (e.g. 400 outside its grid): GFS, and the record says GFS', async () => {
+        answer({ ncep_rrfs_conus: 400, gfs_seamless: FIXTURE });
+        const rec = await store().fetchAndStore(FIX_POINTS);
+        expect(calls).toEqual(['ncep_rrfs_conus', 'gfs_seamless']);
+        expect(rec.model).toBe('GFS');
+    });
+
+    it('RRFS answers with no cloud values at all (all null): GFS', async () => {
+        answer({ ncep_rrfs_conus: allNull(FIXTURE), gfs_seamless: FIXTURE });
+        expect((await store().fetchAndStore(FIX_POINTS)).model).toBe('GFS');
+    });
+
+    it('offline: throws (the caller keeps the old cache), and does not try GFS after a network failure', async () => {
+        answer({});
+        await expect(store().fetchAndStore(FIX_POINTS)).rejects.toThrow();
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+    });
+
+    it('both refuse: throws', async () => {
+        answer({ ncep_rrfs_conus: 500, gfs_seamless: 502 });
+        await expect(store().fetchAndStore(FIX_POINTS)).rejects.toThrow();
+    });
+
+    it('the result carries the model for the WX chip; a record from before this change has none', () => {
+        const rec = { ...cloudNormalize(FIXTURE, FIX_POINTS), model: 'RRFS' };
+        const eta = Date.parse(`${rec.times[3]}Z`) + 60000;
+        expect(cloudBuildResult(rec, [eta, eta], Date.parse(rec.fetchedAt)).model).toBe('RRFS');
+        const old = cloudNormalize(FIXTURE, FIX_POINTS); delete old.model;
+        expect(cloudBuildResult(old, [eta, eta], Date.parse(old.fetchedAt)).model).toBeNull();
+    });
+});
+
+describe('cloud fetch: a 429 stops (no GFS request on top) and says RRFS was refused', () => {
+    afterEach(() => { delete globalThis.fetch; });
+    it('RRFS 429: one request, error names RRFS 429', async () => {
+        const calls = [];
+        globalThis.fetch = async (url) => { calls.push(new URL(url).searchParams.get('models')); return { ok: false, status: 429, statusText: 'Too Many Requests', json: async () => ({}) }; };
+        const s = new CloudForecastStore(); s._save = async () => {};
+        await expect(s.fetchAndStore(FIX_POINTS)).rejects.toThrow(/RRFS.*429/);
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+    });
+});
+
+describe('fetchAndStore options (review of #213): rrfsOnly, isCurrent, 429 status', () => {
+    afterEach(() => { delete globalThis.fetch; });
+    const answer = (byModel) => { const calls = []; globalThis.fetch = async (url) => {
+        const m = new URL(url).searchParams.get('models'); calls.push(m);
+        const v = byModel[m];
+        if (typeof v === 'number') return { ok: false, status: v, statusText: 'x', json: async () => ({}) };
+        return { ok: true, status: 200, json: async () => v };
+    }; return calls; };
+    it('rrfsOnly: RRFS 503 -> throws, no GFS request (the good RRFS cache stays)', async () => {
+        const calls = answer({ ncep_rrfs_conus: 503, gfs_seamless: FIXTURE });
+        const s = new CloudForecastStore(); let saved = 0; s._save = async () => { saved++; };
+        await expect(s.fetchAndStore(FIX_POINTS, { rrfsOnly: true })).rejects.toThrow(/RRFS.*503/);
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+        expect(saved).toBe(0);
+    });
+    it('isCurrent() false when the answer lands: not saved, returns null', async () => {
+        answer({ ncep_rrfs_conus: FIXTURE });
+        const s = new CloudForecastStore(); let saved = 0; s._save = async () => { saved++; };
+        expect(await s.fetchAndStore(FIX_POINTS, { isCurrent: () => false })).toBeNull();
+        expect(saved).toBe(0);
+    });
+    it('the 429 error carries status 429 (so the caller can back off)', async () => {
+        answer({ ncep_rrfs_conus: 429 });
+        const s = new CloudForecastStore(); s._save = async () => {};
+        await expect(s.fetchAndStore(FIX_POINTS)).rejects.toMatchObject({ status: 429 });
+    });
+});
+
+describe('fetchAndStore: a superseded request stops before the GFS fallback (review of bbd645c)', () => {
+    afterEach(() => { delete globalThis.fetch; });
+    it('RRFS has no cloud values but the route has changed: no GFS request, returns null', async () => {
+        const calls = [];
+        const empty = (Array.isArray(FIXTURE) ? FIXTURE : [FIXTURE]).map((loc) => ({ ...loc, hourly: Object.fromEntries(Object.entries(loc.hourly).map(([k, v]) => [k, k === 'time' ? v : v.map(() => null)])) }));
+        globalThis.fetch = async (url) => { calls.push(new URL(url).searchParams.get('models')); return { ok: true, status: 200, json: async () => empty }; };
+        let current = true;
+        const s = new CloudForecastStore(); s._save = async () => {};
+        const p = s.fetchAndStore(FIX_POINTS, { isCurrent: () => current });
+        current = false;
+        expect(await p).toBeNull();
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+    });
+    it('current(): the stored record, or undefined if IndexedDB does not answer within the limit', async () => {
+        const s = new CloudForecastStore();
+        s.load = () => new Promise(() => {});
+        expect(await s.current(20)).toBeUndefined();
+        s._data = { routeHash: 'x' };
+        expect(await s.current(20)).toEqual({ routeHash: 'x' });
+    });
+});
+
+describe('current() (review of 35ca27f): one shared read; undefined when IndexedDB is too slow', () => {
+    it('slow: undefined (not null = nothing stored); several calls share one load()', async () => {
+        const s = new CloudForecastStore();
+        let loads = 0; s.load = () => { loads++; return new Promise(() => {}); };
+        const [a, b] = await Promise.all([s.current(20), s.current(20)]);
+        expect(a).toBeUndefined(); expect(b).toBeUndefined();
+        expect(loads).toBe(1);
+    });
+    it('nothing stored: null', async () => {
+        const s = new CloudForecastStore(); s.load = async () => null;
+        expect(await s.current(20)).toBeNull();
     });
 });
