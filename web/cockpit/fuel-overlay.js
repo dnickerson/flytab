@@ -19,11 +19,9 @@ class FuelOverlay {
         this._shownAt = 0;
         this._applying = false;
         // Re-entrancy guard for _recordFuelStop(), same rationale as _applying above:
-        // the Pi sync it awaits (_syncFuelAddToEngine, up to 4000ms) is a real network
-        // round trip, so a second RECORD tap before the first settles must be refused
-        // rather than racing past the guard-clearing side effects that only run after
-        // the await — otherwise a double tap can duplicate a fuel-stop entry and
-        // double-add gallons to the Pi's authoritative fuel total.
+        // a second RECORD tap while the first is still running must be refused
+        // rather than racing past the guard-clearing side effects — otherwise a
+        // double tap can duplicate a fuel-stop entry.
         this._recording = false;
         // True once the pilot has moved a slider, typed in a tic field or tapped a
         // ± button since the current show(). show() restores the PREVIOUS
@@ -38,28 +36,6 @@ class FuelOverlay {
         // the DEPARTURE reading, and BOTH write paths into canonical FuelTankState —
         // _applyMeasurement() and _recordFuelStop() — must refuse it.
         this._requireFreshTics = false;
-        // True when the last attempt to sync a dropped-burn correction to the Pi
-        // failed (Pi unreachable, or a non-2xx response) — set/cleared only by
-        // _syncDroppedBurnToPi(). Drives _refreshDroppedBurnRow() to keep the row
-        // visible with a RETRY affordance even after the local correction already
-        // landed, so a failed Pi sync isn't a dead end (see PR #143 review).
-        this._piSyncFailed = false;
-        // Mirrors _piSyncFailed but for the RECORD FUEL STOP path — set when
-        // _syncFuelAddToEngine() fails after a fuel stop has already been recorded
-        // locally (flytab_fuel_stops + FuelTankState). _lastFuelStopPending holds the
-        // exact {gallons, airport, price} that failed to reach the Pi, so the RECORD
-        // FUEL STOP button can dual-purpose as a Pi-only retry (same pattern as
-        // _piSyncFailed / _retryPiDroppedBurnSync(), PR #143) instead of forcing the
-        // pilot to re-enter a fresh tic reading — which would append a SECOND
-        // flytab_fuel_stops entry and, since the Pi's fuel total is additive, could
-        // double-add gallons if the original POST actually landed despite the
-        // client-side failure (Finding 1, 2026-09 whole-branch audit). Only the most
-        // recently failed fuel stop is tracked; if a second, distinct stop is recorded
-        // successfully before an earlier failure is retried, the earlier failure's
-        // tracking is intentionally superseded (single-slot, not a queue) — matches
-        // the scope of the audit finding.
-        this._fuelStopPiSyncFailed = false;
-        this._lastFuelStopPending = null;
         this._buildDOM();
     }
 
@@ -394,15 +370,9 @@ class FuelOverlay {
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
         });
 
-        // Wire dropped-burn correction. When only a Pi sync is outstanding (local
-        // side already applied but the Pi never got it), the button retries just
-        // the Pi sync instead of re-touching FuelTankState — see _refreshDroppedBurnRow().
+        // Wire dropped-burn correction (applied on the tablet's FuelTankState only).
         wireTap(this._el.querySelector('#fo-dropped-burn-apply'), () => {
-            if (this._piSyncFailed && !(FuelTankState.getState()?.dropped_burn_estimate_gal > 0.05)) {
-                this._retryPiDroppedBurnSync();
-            } else {
-                this._applyDroppedBurnCorrection();
-            }
+            this._applyDroppedBurnCorrection();
         });
 
         // Wire apply
@@ -410,18 +380,9 @@ class FuelOverlay {
             this._applyMeasurement();
         });
 
-        // Wire fuel-add record button. Dual-purpose, same pattern as the dropped-burn
-        // APPLY/RETRY button: when the last fuel stop's Pi sync failed and the pilot
-        // has not entered a new gallons figure (addGal is empty — it's cleared after
-        // every record attempt, success or failure), this tap retries ONLY the Pi
-        // sync for the pending stop rather than recording a new one.
+        // Wire fuel-add record button
         wireTap(this._el.querySelector('#fo-add-record'), () => {
-            const newGalEntered = parseFloat(this._dom.addGal.value) > 0;
-            if (this._fuelStopPiSyncFailed && this._lastFuelStopPending && !newGalEntered) {
-                this._retryFuelStopPiSync();
-            } else {
-                this._recordFuelStop();
-            }
+            this._recordFuelStop();
         });
 
         // Wire Pi K-factor apply button
@@ -493,19 +454,6 @@ class FuelOverlay {
         this._dom.addStatus.textContent = '';
         if (this._dom.applyStatus) this._dom.applyStatus.textContent = '';
 
-        // Unlike _ticsTouchedSinceShow, a pending failed fuel-stop Pi sync is NOT a
-        // per-session thing — closing and reopening the overlay doesn't make the Pi's
-        // fuel total any less wrong, so this persists across show()/hide() (mirrors
-        // _piSyncFailed) and is re-surfaced here rather than reset.
-        this._refreshFuelStopButton();
-        if (this._fuelStopPiSyncFailed && this._lastFuelStopPending) {
-            const { gallons, airport, reason } = this._lastFuelStopPending;
-            this._setAddStatus(
-                `Pi still doesn't have the +${gallons.toFixed(1)} gal fuel stop at ${airport || '—'} ` +
-                `(${reason}). No new reading needed — tap RECORD FUEL STOP to retry sending it to the Pi.`,
-                'error');
-        }
-
         this._updateDisplay();
         this._updateSourceDisplay();
         this._renderHistory();
@@ -572,15 +520,6 @@ class FuelOverlay {
                     this._dom.droppedBurnInput.value = dropped.toFixed(1);
                 }
                 this._dom.droppedBurnApply.textContent = 'APPLY CORRECTION';
-            } else if (this._piSyncFailed) {
-                // Nothing left to apply locally, but the Pi never got its own
-                // correction — keep the row up as a retry affordance rather than
-                // silently dropping the pilot's confirmed correction (PR #143 review).
-                this._dom.droppedBurnVal.textContent = '0.0';
-                this._dom.droppedBurnRow.style.display = '';
-                this._dom.droppedBurnInput.value = '0.0';
-                this._dom.droppedBurnInput.disabled = true;
-                this._dom.droppedBurnApply.textContent = 'RETRY PI SYNC';
             } else {
                 this._dom.droppedBurnRow.style.display = 'none';
             }
@@ -725,15 +664,7 @@ class FuelOverlay {
             this._updateSourceDisplay();
             this._syncMeasurement(m);
             this._renderHistory();
-            // Sync authoritative tic measurement to Pi so both systems agree. Reported
-            // to the pilot instead of swallowed — a failed sync here means the Pi's own
-            // fuel total silently diverges from what FlyTab now shows (PR #143 audit).
-            const synced = await this._syncFuelSetToEngine(m.total_gal, 'Preflight tic mark measurement');
-            if (synced.ok) {
-                this.hide();
-            } else {
-                this._setApplyStatus(synced.message, 'error');
-            }
+            this.hide();
         }).catch(err => console.error('[FuelOverlay] applyMeasurement failed:', err))
           .finally(() => { this._applying = false; });
     }
@@ -787,11 +718,9 @@ class FuelOverlay {
 
     async _recordFuelStop() {
         // Re-entrancy guard, same rationale as _applyMeasurement()'s _applying latch:
-        // the Pi sync below is a real await (up to 4000ms), and the guard-clearing
-        // side effects (_ticsTouchedSinceShow, addGal/addPrice/addGalL/addGalR) only
-        // run after it settles. Without this, a second RECORD tap before the first
-        // settles would sail past every other guard and append a duplicate
-        // flytab_fuel_stops entry, double-adding gallons to the Pi's authoritative total.
+        // the guard-clearing side effects (_ticsTouchedSinceShow, addGal/addPrice/
+        // addGalL/addGalR) run only after the work below, so a second RECORD tap
+        // must be refused rather than appending a duplicate flytab_fuel_stops entry.
         if (this._recording) return;
 
         const gallons = parseFloat(this._dom.addGal.value);
@@ -860,9 +789,6 @@ class FuelOverlay {
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
 
-            // Sync fuel stop to Pi — reported instead of swallowed (see _syncFuelSetToEngine).
-            const synced = await this._syncFuelAddToEngine(gallons, airport, price);
-
             // The reading has been consumed. A second RECORD tap must be backed by its own
             // fresh measurement, not this one — otherwise a double tap (or a second stop
             // on the same ramp) re-writes these gallons and re-stamps initialized_at.
@@ -874,114 +800,11 @@ class FuelOverlay {
             if (this._dom.addGalL) this._dom.addGalL.value = '';
             if (this._dom.addGalR) this._dom.addGalR.value = '';
 
-            if (synced.ok) {
-                // This record's own sync landed — but don't clobber tracking of a
-                // DIFFERENT, still-unretried fuel stop's failure (single-slot, see
-                // constructor comment): only clear if nothing else is pending.
-                if (!this._lastFuelStopPending) this._fuelStopPiSyncFailed = false;
-                this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
-            } else {
-                // Local record already landed (flytab_fuel_stops + FuelTankState,
-                // above) — track exactly this stop so RECORD FUEL STOP can retry ONLY
-                // the Pi POST, never re-writing local state (Finding 1, 2026-09 audit).
-                this._fuelStopPiSyncFailed = true;
-                this._lastFuelStopPending = { gallons, airport, price, reason: synced.message };
-                this._setAddStatus(
-                    `Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total. ` +
-                    `Pi not yet updated (${synced.message}) No new reading needed — tap RECORD FUEL STOP again to resend this fuel stop to the Pi.`,
-                    'error');
-            }
-            this._refreshFuelStopButton();
+            this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
         } catch (err) {
             this._setAddStatus(`Save failed: ${err.message}`, 'error');
         } finally {
             this._recording = false;
-        }
-    }
-
-    /** Toggle the RECORD FUEL STOP button's label between its two purposes —
-     *  recording a new stop, or (when the last stop's Pi sync failed) retrying
-     *  just that sync. Mirrors _refreshDroppedBurnRow()'s APPLY/RETRY toggle. */
-    _refreshFuelStopButton() {
-        if (!this._dom.addRecord) return;
-        this._dom.addRecord.textContent =
-            (this._fuelStopPiSyncFailed && this._lastFuelStopPending) ? 'RETRY PI SYNC' : 'RECORD FUEL STOP';
-    }
-
-    /**
-     * Retry syncing the last-failed fuel stop to the Pi only — used when the local
-     * record already landed (flytab_fuel_stops + FuelTankState) but the earlier
-     * _syncFuelAddToEngine() call failed. Does NOT touch localStorage or
-     * FuelTankState again: doing so would append a second flytab_fuel_stops entry,
-     * and since the Pi's fuel total is additive, could double-add gallons if the
-     * original POST actually landed despite the client-side failure (e.g. a slow
-     * Pi that timed out at the JS side but still processed the request).
-     */
-    async _retryFuelStopPiSync() {
-        if (!this._lastFuelStopPending || this._recording) return;
-        this._recording = true;
-        if (this._dom.addRecord) this._dom.addRecord.disabled = true;
-        try {
-            const { gallons, airport, price } = this._lastFuelStopPending;
-            // The Pi's /api/fuel/add is additive with no duplicate check, so a
-            // first attempt that landed but answered after the 4 s timeout would
-            // be added twice by a blind resend. Look first.
-            const onPi = await this._fuelStopAlreadyOnPi(gallons, airport);
-            if (onPi === true) {
-                this._fuelStopPiSyncFailed = false;
-                this._lastFuelStopPending = null;
-                this._setAddStatus(
-                    `The Pi already has the +${gallons.toFixed(1)} gal fuel stop at ${airport || '—'} — not sent again.`,
-                    'ok');
-                return;
-            }
-            if (onPi === null) {
-                const reason = 'Could not check the Pi for this fuel stop.';
-                this._lastFuelStopPending = { gallons, airport, price, reason };
-                this._setAddStatus(`Retry not sent — ${reason} Tap RECORD FUEL STOP again when the Pi is reachable.`, 'error');
-                return;
-            }
-            const synced = await this._syncFuelAddToEngine(gallons, airport, price);
-            if (synced.ok) {
-                this._fuelStopPiSyncFailed = false;
-                this._lastFuelStopPending = null;
-                this._setAddStatus(
-                    `Pi sync succeeded — +${gallons.toFixed(1)} gal at ${airport || '—'} is now recorded on the Pi as well.`,
-                    'ok');
-            } else {
-                this._lastFuelStopPending = { gallons, airport, price, reason: synced.message };
-                this._setAddStatus(`Retry failed — ${synced.message} Tap RECORD FUEL STOP again to retry.`, 'error');
-            }
-        } finally {
-            this._recording = false;
-            if (this._dom.addRecord) this._dom.addRecord.disabled = false;
-            this._refreshFuelStopButton();
-        }
-    }
-
-    /**
-     * Whether the Pi's most recent fuel addition is this stop (same airport and
-     * gallons): true / false, or null if the Pi's history can't be read. Only the
-     * latest entry is compared. If an earlier identical stop happens to be the
-     * latest, the resend is skipped and the Pi under-counts by one stop -- the
-     * conservative direction, unlike a double add.
-     * @returns {Promise<boolean|null>}
-     */
-    async _fuelStopAlreadyOnPi(gallons, airport) {
-        const base = this._engineBaseUrl();
-        if (!base) return null;
-        try {
-            const resp = await fetch(`${base}/api/fuel/history`, { signal: AbortSignal.timeout(4000) });
-            if (!resp.ok) return null;
-            const data = await resp.json();
-            const additions = Array.isArray(data?.fuel_additions) ? data.fuel_additions : null;
-            if (!additions) return null;
-            const last = additions[additions.length - 1];
-            if (!last) return false;
-            return String(last.airport || '') === String(airport || '').toUpperCase()
-                && Math.abs(Number(last.gallons) - gallons) < 0.06;
-        } catch (_) {
-            return null;
         }
     }
 
@@ -998,7 +821,7 @@ class FuelOverlay {
 
     /**
      * Apply a pilot-confirmed (or edited) dropped-burn correction to FlyTab's own
-     * FuelTankState, then sync the Pi's independent FuelTracker separately.
+     * FuelTankState. The tablet is the only fuel record; nothing is sent to the Pi.
      */
     async _applyDroppedBurnCorrection() {
         const gallons = parseFloat(this._dom.droppedBurnInput.value);
@@ -1035,138 +858,22 @@ class FuelOverlay {
                     'Could not apply — tank state needs confirmation. Confirm tank selection, then retry.', 'error');
                 return;
             }
-            await this._syncDroppedBurnToPi();
+            this._setDroppedBurnStatus(`Applied ${gallons.toFixed(1)} gal correction`, 'ok');
         } finally {
             this._dom.droppedBurnApply.disabled = false;
             this._refreshDroppedBurnRow();
-        }
-    }
-
-    /** Retry syncing to the Pi only — used when the local correction already
-     *  landed but the earlier Pi sync attempt failed. Does not touch FuelTankState
-     *  again (that would double-subtract from the tank). */
-    async _retryPiDroppedBurnSync() {
-        this._dom.droppedBurnApply.disabled = true;
-        try {
-            await this._syncDroppedBurnToPi();
-        } finally {
-            this._dom.droppedBurnApply.disabled = false;
-            this._refreshDroppedBurnRow();
-        }
-    }
-
-    /**
-     * Tell the Pi to apply ITS OWN tracked dropped_burn_estimate_gal (the server
-     * ignores any amount from the client — see the /api/fuel/apply_dropped_burn
-     * handler comment: FlyTab's estimate is a different quantity from a different
-     * sample stream and must not be pushed onto the Pi's tracker). Unlike
-     * _syncFuelSetToEngine()/_syncFuelAddToEngine(), failure here is reported to
-     * the pilot instead of swallowed, and sets _piSyncFailed so the row stays up
-     * as a retry affordance rather than silently going stale.
-     */
-    async _syncDroppedBurnToPi() {
-        const base = this._engineBaseUrl();
-        if (!base) {
-            this._piSyncFailed = true;
-            this._setDroppedBurnStatus(
-                'Applied locally — Pi unreachable, engine-side total NOT corrected. Retry when back in range.', 'error');
-            return;
-        }
-        try {
-            const resp = await fetch(`${base}/api/fuel/apply_dropped_burn`, {
-                method: 'POST',
-                signal: AbortSignal.timeout(4000),
-            });
-            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            let result;
-            try {
-                result = await resp.json();
-            } catch (parseErr) {
-                // The Pi's endpoint ran (200 OK, and it applies under a single lock
-                // acquisition — see engine_monitor.py's apply_own_dropped_burn()), so
-                // the correction almost certainly landed. But we can't confirm the
-                // amount, so this must NOT collapse into the same reassuring message
-                // as a verified success (PR #143 review) — flag it and offer a retry.
-                this._piSyncFailed = true;
-                this._setDroppedBurnStatus(
-                    'Pi accepted the correction but its response could not be read — verify the Pi\'s own fuel display, or retry.', 'error');
-                return;
-            }
-            this._piSyncFailed = false;
-            const appliedGal = result?.applied_gal;
-            this._setDroppedBurnStatus(
-                appliedGal != null
-                    ? `Applied locally; Pi applied its own ${appliedGal.toFixed(1)} gal estimate`
-                    : 'Applied to both trackers', 'ok');
-        } catch (err) {
-            this._piSyncFailed = true;
-            this._setDroppedBurnStatus(
-                `Applied locally — Pi sync failed (${err.message}). Retry when back in range.`, 'error');
         }
     }
 
     _setDroppedBurnStatus(msg, type) { this._setStatus(this._dom.droppedBurnStatus, msg, type); }
 
-    // The Pi POSTs in this file (/api/fuel/set, /api/fuel/add,
-    // /api/fuel/calibration/applied) must not set Content-Type. Setting it to
-    // application/json makes the request non-simple, so the WebView first sends
-    // a CORS preflight (OPTIONS) that engine_monitor.py has no handler for --
-    // the preflight fails and the POST never goes out ("Failed to fetch").
-    // Without the header fetch sends the CORS-safelisted text/plain, which the
-    // Pi's json.loads(body) parses fine. Same fix as _setAtis in engine-page.js.
-    /**
-     * Push the pilot-confirmed tic measurement to the Pi as its new authoritative
-     * fuel_remaining. Returns {ok, message} instead of swallowing the outcome — a
-     * failed sync here leaves the Pi's own fuel total silently diverged from what
-     * FlyTab now shows, the same risk fixed for the dropped-burn correction's Pi
-     * sync in PR #143.
-     * @returns {Promise<{ok: boolean, message: string}>}
-     */
-    async _syncFuelSetToEngine(gallons, reason = '') {
-        const base = this._engineBaseUrl();
-        if (!base) {
-            return { ok: false, message: 'Measurement saved locally — Pi unreachable, engine-side total NOT updated. Retry when back in range.' };
-        }
-        try {
-            const resp = await fetch(`${base}/api/fuel/set`, {
-                method: 'POST',
-                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _syncFuelSetToEngine).
-                body: JSON.stringify({ fuel_remaining: gallons, reason }),
-                signal: AbortSignal.timeout(4000),
-            });
-            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            return { ok: true, message: '' };
-        } catch (err) {
-            return { ok: false, message: `Measurement saved locally — Pi sync failed (${err.message}). Retry when back in range.` };
-        }
-    }
-
-    /**
-     * Push a recorded fuel stop to the Pi's own fuel-addition log. Returns
-     * {ok, message} — same rationale as _syncFuelSetToEngine().
-     * @returns {Promise<{ok: boolean, message: string}>}
-     */
-    async _syncFuelAddToEngine(gallons, airport = '', price = null) {
-        const base = this._engineBaseUrl();
-        if (!base) {
-            return { ok: false, message: 'Fuel stop saved locally — Pi unreachable, engine-side total NOT updated. Retry when back in range.' };
-        }
-        const body = { gallons };
-        if (airport) body.airport = airport;
-        if (price != null) body.price_per_gallon = price;
-        try {
-            const resp = await fetch(`${base}/api/fuel/add`, {
-                method: 'POST',
-                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _syncFuelSetToEngine).
-                body: JSON.stringify(body),
-                signal: AbortSignal.timeout(4000),
-            });
-            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            return { ok: true, message: '' };
-        } catch (err) {
-            return { ok: false, message: `Fuel stop saved locally — Pi sync failed (${err.message}). Retry when back in range.` };
-        }
-    }
+    // The Pi POST in this file (/api/fuel/calibration/applied) must not set
+    // Content-Type. Setting it to application/json makes the request non-simple,
+    // so the WebView first sends a CORS preflight (OPTIONS) that engine_monitor.py
+    // has no handler for -- the preflight fails and the POST never goes out
+    // ("Failed to fetch"). Without the header fetch sends the CORS-safelisted
+    // text/plain, which the Pi's json.loads(body) parses fine. Same fix as
+    // _setAtis in engine-page.js.
 
     _setAddStatus(msg, type) { this._setStatus(this._dom.addStatus, msg, type); }
 
@@ -1401,7 +1108,7 @@ class FuelOverlay {
         try {
             const resp = await fetch(`${base}/api/fuel/calibration/applied`, {
                 method: 'POST',
-                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _syncFuelSetToEngine).
+                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _setAddStatus).
                 body: JSON.stringify({ new_k_factor: newK }),
                 signal: AbortSignal.timeout(4000),
             });
