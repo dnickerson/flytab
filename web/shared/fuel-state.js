@@ -41,10 +41,12 @@ class FuelState {
      *
      * `stale` is the single shared answer to "can this number be trusted as a live
      * measurement?". It is true only for a tracked `tank_state` figure that
-     * FuelTankState considers unconfirmed (>45 min without an integrated sample —
-     * an in-flight tablet reboot, Pi dropout or app kill). The burn during that gap
-     * was never subtracted, so a stale figure always reads HIGH; every display that
-     * shows it must mark it rather than present it as a measurement.
+     * FuelTankState considers unconfirmed (needsConfirmation(): >45 min without an
+     * integrated sample — an in-flight tablet reboot, Pi dropout or app kill — or,
+     * at once, fuel-flow data stopped or frozen while the engine runs, flow_lost_at).
+     * The burn during that gap was never subtracted, so a stale figure always reads
+     * HIGH; every display that shows it must mark it rather than present it as a
+     * measurement.
      *
      * It lives here rather than in each consumer because three instruments
      * (engine-page.js, instrument-strip.js, route-table.js) plus the
@@ -75,6 +77,27 @@ class FuelState {
             }
         } catch (_) { /* FuelTankState unavailable */ }
         return { gallons: FuelState._capacityFallback(), source: 'capacity', stale: false };
+    }
+
+    /**
+     * Fuel on board as a measurement, for consumers that pass the figure on (the
+     * flight recorder's Gallons Remaining column, the EngineML fuel_remaining input,
+     * the engine panel): `{ gallons, stale }` for a tracked or manual figure, null
+     * when only the capacity default is known or the read fails. `stale` is
+     * getCurrentFuel()'s: a stale tracked figure reads HIGH, so each caller must
+     * drop or mark it, never pass it on as live. One helper so the three cannot
+     * drift apart.
+     * @returns {{ gallons: number, stale: boolean }|null}
+     */
+    static measuredGallons() {
+        try {
+            const f = FuelState.getCurrentFuel();
+            if (!f || (f.source !== 'tank_state' && f.source !== 'manual')) return null;
+            if (!Number.isFinite(f.gallons)) return null;
+            return { gallons: f.gallons, stale: !!f.stale };
+        } catch (_) {
+            return null;
+        }
     }
 
     /** Shared capacity fallback — must match fuel-tanks.js's own 18gal/side * 2 default. */

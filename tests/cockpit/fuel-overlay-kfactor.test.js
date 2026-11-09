@@ -240,8 +240,10 @@ describe('I1: garbage legs are excluded and counted', () => {
         applyTic(6, 6);              // tracked 26.0, actual 10.0
 
         const p = panel();
+        // Tracked used is the flow burn (PR #214 finding 3): 10.0 + the 10 s sample
+        // after the gap (0.028), not the rounded tank total's 36.0 − 26.0.
         expect(p.used).toBe('10.0 gal');
-        expect(p.ratio).toBe('1.000');
+        expect(p.ratio).toBe('1.003');
         expect(p.excludedShown).toBe(false);
     });
 
@@ -284,5 +286,131 @@ describe('I1: garbage legs are excluded and counted', () => {
         expect(p.used).toBe('10.5 gal');
         expect(p.excluded).toBe(
             '4 legs excluded: 1 tracker reset, 1 unconfirmed, 1 more than 25% off, 1 unusable reading');
+    });
+});
+
+/* ---- PR #214 review findings 3, 4, 2 (history read), 9 ---------------------- */
+
+describe('finding 3: tracked leg burn is the flow burn, even when a tank clamped at 0', () => {
+    it('the record carries flow_burn_since_init_gal (burned − dropped applied, before the re-init)', () => {
+        FuelTankState.init(18, 18, 'L');
+        applyTic(11, 11);
+        fly(10.0);
+        at(NOW + 180000);
+        FuelTankState.onSample(10, NOW);                       // + dropped estimate
+        expect(FuelTankState.applyDroppedBurn(0.47)).toBe(true);
+        applyTic(6, 6);
+        const h1 = history()[1];
+        expect(h1.flow_burn_since_init_gal).toBeCloseTo(10.0 + 10 * 10 / 3600, 6);
+        // nothing tracked → null
+        localStorage.clear(); FuelTankState._state = null; FuelTankState._loaded = true;
+        applyTic(6, 6);
+        expect(history()[0].flow_burn_since_init_gal).toBeNull();
+    });
+
+    it('tank L clamped at 0 mid-leg: the full 19.0 gal of flow counts, not 36 − 18', () => {
+        FuelTankState.init(18, 18, 'L');
+        applyTic(11, 11);            // 36.0 (18.0 / 18.0)
+        fly(19.0);                   // L floors at 0 after 18.0; 19.0 gal of flow integrated
+        expect(FuelTankState.getState().left_gal).toBe(0);
+        applyTic(0, 11);             // 2.2 + 18.0 = 20.2 → actual 15.8
+        const p = panel();
+        expect(p.filled).toBe('15.8 gal');
+        expect(p.used).toBe('19.0 gal');
+        expect(p.ratio).toBe('1.203');
+    });
+
+    it('uses the recorded flow burn over the tic difference when present', () => {
+        localStorage.setItem('flypi_fuel_history', JSON.stringify([
+            { measured_at: '2026-11-01T12:00:00Z', total_gal: 36.0, tracked_gal: 30.0, tracked_since: 'i0', tank_init_at: 'i1', tracked_stale: false, dropped_applied_since_init_gal: 0, flow_burn_since_init_gal: 6 },
+            // tic difference would say 36 − 18 = 18; the flow burn says 20.
+            { measured_at: '2026-11-01T13:00:00Z', total_gal: 19.0, tracked_gal: 18.0, tracked_since: 'i1', tank_init_at: 'i2', tracked_stale: false, dropped_applied_since_init_gal: 0, flow_burn_since_init_gal: 20 },
+        ]));
+        const p = panel();
+        expect(p.filled).toBe('17.0 gal');
+        expect(p.used).toBe('20.0 gal');
+    });
+});
+
+describe('finding 4: outlier gate relative to the median with ≥ 3 candidate legs', () => {
+    const e = (min, tic, trk, i) => ({
+        measured_at: new Date(Date.UTC(2026, 10, 1, 12, 0) + min * 60000).toISOString(),
+        total_gal: tic, tracked_gal: trk, tracked_since: 'i' + i, tank_init_at: 'i' + (i + 1),
+        tracked_stale: false, dropped_applied_since_init_gal: 0,
+    });
+
+    it('three legs at ~1.30: counted, ratio 1.300 and the guidance (Σactual 30 gal)', () => {
+        localStorage.setItem('flypi_fuel_history', JSON.stringify([
+            e(0, 40, 40, 0),
+            e(60, 30, 27, 1),        // actual 10, tracked 13
+            e(120, 20, 17, 2),       // actual 10, tracked 13
+            e(180, 10, 7, 3),        // actual 10, tracked 13
+        ]));
+        const p = panel();
+        expect(p.filled).toBe('30.0 gal');
+        expect(p.used).toBe('39.0 gal');
+        expect(p.ratio).toBe('1.300');
+        expect(p.guidance).toMatch(/New K-Factor = Current K-Factor × 1\.300\s+\(increase K-factor/);
+        expect(p.excludedShown).toBe(false);
+    });
+
+    it('two consistent legs at 1.30: excluded by the absolute gate, as before', () => {
+        localStorage.setItem('flypi_fuel_history', JSON.stringify([
+            e(0, 40, 40, 0), e(60, 30, 27, 1), e(120, 20, 17, 2),
+        ]));
+        const p = panel();
+        expect(p.ratio).toBe('--');
+        expect(p.excluded).toBe('2 legs excluded: 2 more than 25% off');
+    });
+
+    it('one garbage leg among four normal ones: only the garbage leg is excluded', () => {
+        localStorage.setItem('flypi_fuel_history', JSON.stringify([
+            e(0, 50, 50, 0),
+            e(60, 40, 39.8, 1),      // 10 / 10.2
+            e(120, 30, 30.1, 2),     // 10 / 9.9
+            e(180, 25, 15, 3),       // 5 / 15  → 3.0: garbage
+            e(240, 15, 14.8, 4),     // 10 / 10.2
+            e(300, 5, 5.1, 5),       // 10 / 9.9
+        ]));
+        const p = panel();
+        expect(p.filled).toBe('40.0 gal');
+        expect(p.used).toBe('40.2 gal');
+        expect(p.excluded).toBe('1 leg excluded: 1 more than 25% off');
+    });
+});
+
+describe('finding 2: K-factor reads history through _loadHistory()', () => {
+    it('_computeKFactor uses the shared loader', () => {
+        const spy = vi.spyOn(FuelOverlay.prototype, '_loadHistory');
+        overlay._computeKFactor();
+        expect(spy).toHaveBeenCalled();
+        spy.mockRestore();
+    });
+});
+
+describe('finding 3: a hand-edited TRACKED figure reaches the K-factor', () => {
+    const rec = (min, tic, trk, i, flow) => ({
+        measured_at: new Date(Date.UTC(2026, 10, 1, 12, 0) + min * 60000).toISOString(),
+        total_gal: tic, tracked_gal: trk, tracked_since: 'i' + i, tank_init_at: 'i' + (i + 1),
+        tracked_stale: false, dropped_applied_since_init_gal: 0, flow_burn_since_init_gal: flow,
+    });
+    const editNewest = (val) => {
+        const tr = overlay._dom.histBody.querySelector('tr');
+        tr.querySelector('.fo-hist-edit').dispatchEvent(new window.MouseEvent('click'));
+        tr.querySelector('input[id^="fo-hist-tracked-"]').value = val;
+        tr.querySelector('.fo-hist-save').dispatchEvent(new window.MouseEvent('click'));
+    };
+
+    it('editing TRACKED drops the recorded flow burn; saving it unchanged keeps it', () => {
+        localStorage.setItem('flypi_fuel_history', JSON.stringify([
+            rec(0, 36.0, 30.0, 0, 5), rec(60, 26.0, 25.0, 1, 10.4),
+        ]));
+        open();
+        editNewest('25.0');                                  // unchanged
+        expect(history()[1].flow_burn_since_init_gal).toBe(10.4);
+        expect($('fo-kf-used').textContent).toBe('10.4 gal');
+        editNewest('25.5');                                  // corrected
+        expect(history()[1].flow_burn_since_init_gal).toBeUndefined();
+        expect($('fo-kf-used').textContent).toBe('10.5 gal');   // 36.0 − 25.5
     });
 });

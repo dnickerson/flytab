@@ -44,6 +44,9 @@ const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 // exact class of global-scope bug that broke this file once already —
 // see tests/shared/phase-detector-browser-load.test.js).
 const EngineMLBridge = new Function(read('web/cockpit/engine-ml.js') + '\nreturn EngineMLBridge;')();
+// Real FuelState (its measuredGallons() is what engine-ml reads) with the fuel read stubbed.
+const RealFuelState = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
+const setFuel = (f) => { RealFuelState.getCurrentFuel = () => f; globalThis.FuelState = RealFuelState; };
 
 let processSampleSpy;
 let classifySpy;
@@ -164,7 +167,7 @@ describe('EngineMLBridge — payload field-name contract', () => {
     });
 
     it('reads oil temp/pressure and carb temp from their real fields; fuel remaining from the tablet (FuelState)', async () => {
-        globalThis.FuelState = { getCurrentFuel: () => ({ gallons: 24.9, source: 'tank_state', stale: false }) };
+        setFuel({ gallons: 24.9, source: 'tank_state', stale: false });
         await bridge._onEngineData(ENGINE_FRAME);
         expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({
             oil_temp: 180.0,       // Oil_Temp
@@ -175,13 +178,25 @@ describe('EngineMLBridge — payload field-name contract', () => {
     });
 
     it('sends 0 fuel_remaining when only the capacity default is known (not a measurement)', async () => {
-        globalThis.FuelState = { getCurrentFuel: () => ({ gallons: 36, source: 'capacity', stale: false }) };
+        setFuel({ gallons: 36, source: 'capacity', stale: false });
         await bridge._onEngineData({ ...ENGINE_FRAME, fuel: { fuel_remaining: 30 } });
         expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 0 }));
     });
 
+    it('sends 0 fuel_remaining for a stale (UNCONFIRMED) tracked figure, never the high number', async () => {
+        setFuel({ gallons: 24.9, source: 'tank_state', stale: true });
+        await bridge._onEngineData(ENGINE_FRAME);
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 0 }));
+    });
+
+    it('reads fuel through FuelState.measuredGallons() (one helper, no private copy)', () => {
+        const src = read('web/cockpit/engine-ml.js');
+        expect(src).toMatch(/FuelState\.measuredGallons\(\)/);
+        expect(src).not.toMatch(/_tabletFuelGal/);
+    });
+
     it('ignores the Pi tracker data.fuel.fuel_remaining', async () => {
-        globalThis.FuelState = { getCurrentFuel: () => ({ gallons: 11, source: 'manual', stale: false }) };
+        setFuel({ gallons: 11, source: 'manual', stale: false });
         await bridge._onEngineData({ ...ENGINE_FRAME, fuel: { fuel_remaining: 30 } });
         expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 11 }));
     });

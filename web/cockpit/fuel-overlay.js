@@ -5,9 +5,13 @@
  */
 
 class FuelOverlay {
-    /** K-factor: a leg whose tracked burn is more than this fraction off its actual
-     *  burn is excluded (Ruling 15d). */
+    /** K-factor outlier gate (Ruling 15d, PR #214 finding 4): with fewer than
+     *  KF_MEDIAN_MIN_LEGS candidate legs, a leg whose tracked ÷ actual is more than
+     *  this fraction off 1.0 is excluded; with at least that many, a leg more than
+     *  this fraction off the MEDIAN ratio of the candidate legs is excluded, so a
+     *  consistent mis-calibration (every leg ~1.30) is shown instead of hidden. */
     static KF_OUTLIER_FRAC = 0.25;
+    static KF_MEDIAN_MIN_LEGS = 3;
     /** K-factor: the New K-Factor guidance needs at least this much actual burn over
      *  the counted legs (Ruling 16). */
     static KF_MIN_ACTUAL_GAL = 30;
@@ -123,7 +127,7 @@ class FuelOverlay {
                         <div class="fo-edm-val" id="fo-edm-tic">--</div>
                     </div>
                     <div class="fo-edm-item">
-                        <div class="fo-edm-label">TRACKED</div>
+                        <div class="fo-edm-label" id="fo-edm-tracked-label">TRACKED</div>
                         <div class="fo-edm-val" id="fo-edm-tracked">--</div>
                     </div>
                     <div class="fo-edm-item">
@@ -253,6 +257,7 @@ class FuelOverlay {
             edmSection: this._el.querySelector('#fo-edm-section'),
             edmTic: this._el.querySelector('#fo-edm-tic'),
             edmTracked: this._el.querySelector('#fo-edm-tracked'),
+            edmTrackedLabel: this._el.querySelector('#fo-edm-tracked-label'),
             edmD180: this._el.querySelector('#fo-edm-d180'),
             edmVar: this._el.querySelector('#fo-edm-var'),
             edmGrade: this._el.querySelector('#fo-edm-grade'),
@@ -369,6 +374,10 @@ class FuelOverlay {
         wireTap(this._el.querySelector('#fo-apply'), () => {
             this._applyMeasurement();
         });
+
+        // Gallons typed into FUEL ADDED change what the tic should read (tracked +
+        // pumped), so the TIC vs TRACKED block re-grades as they are typed.
+        this._dom.addGal.addEventListener('input', () => this._updateTrackedComparison());
 
         // Wire fuel-add record button
         wireTap(this._el.querySelector('#fo-add-record'), () => {
@@ -508,8 +517,12 @@ class FuelOverlay {
      * `stale` reuses FuelState.getCurrentFuel()'s rule (FuelTankState.needsConfirmation()).
      * `since` is the FuelTankState init this figure counts from (initialized_at);
      * `droppedApplied` the dropped-burn corrections applied since then (0 when the
-     * stored state predates that field).
-     * @returns {{gal: number, stale: boolean, since: (string|null), droppedApplied: number}|null}
+     * stored state predates that field). `flowBurn` is the fuel-flow burn since that
+     * init: burned_since_init_gal − droppedApplied. It counts burn charged to a tank
+     * already floored at 0, which the tank total cannot show. Null when the stored
+     * state predates burned_since_init_gal.
+     * @returns {{gal: number, stale: boolean, since: (string|null), droppedApplied: number,
+     *            flowBurn: (number|null)}|null}
      */
     _trackedTotal() {
         try {
@@ -523,14 +536,25 @@ class FuelOverlay {
             const since = st.initialized_at ?? null;
             const droppedApplied = (typeof st.dropped_applied_since_init_gal === 'number' &&
                 Number.isFinite(st.dropped_applied_since_init_gal)) ? st.dropped_applied_since_init_gal : 0;
-            return { gal, stale, since, droppedApplied };
+            const burned = st.burned_since_init_gal;
+            const flowBurn = (typeof burned === 'number' && Number.isFinite(burned))
+                ? Math.max(0, burned - droppedApplied) : null;
+            return { gal, stale, since, droppedApplied, flowBurn };
         } catch (_) { return null; }
+    }
+
+    /** Valid gallons in FUEL ADDED (a number > 0), else 0. */
+    _addedGallons() {
+        const v = parseFloat(this._dom.addGal ? this._dom.addGal.value : '');
+        return (Number.isFinite(v) && v > 0) ? v : 0;
     }
 
     /**
      * TIC | TRACKED | VARIANCE (TIC − TRACKED) | ACCURACY, plus a smaller
      * "D-180: <x> gal" line when the D-180's own fuel figure is fresh. Hidden when
-     * there is no tracked tank state to compare with.
+     * there is no tracked tank state to compare with. With gallons in FUEL ADDED the
+     * tic is graded against tracked + those gallons (what a fuel stop should read),
+     * labelled "TRACKED + x ADDED".
      */
     _updateTrackedComparison() {
         const tracked = this._trackedTotal();
@@ -539,11 +563,17 @@ class FuelOverlay {
             return;
         }
         this._dom.edmSection.style.display = '';
+        const added = this._addedGallons();
+        const ref = Math.round((tracked.gal + added) * 10) / 10;
         const m = FuelEngine.createMeasurement(
-            this._leftTic, this._rightTic, this._coefficients, tracked.gal
+            this._leftTic, this._rightTic, this._coefficients, null, ref
         );
         this._dom.edmTic.textContent = m.total_gal.toFixed(1) + ' gal';
-        this._dom.edmTracked.textContent = tracked.gal.toFixed(1) + ' gal' +
+        if (this._dom.edmTrackedLabel) {
+            this._dom.edmTrackedLabel.textContent =
+                added > 0 ? `TRACKED + ${added.toFixed(1)} ADDED` : 'TRACKED';
+        }
+        this._dom.edmTracked.textContent = ref.toFixed(1) + ' gal' +
             (tracked.stale ? ' (UNCONFIRMED)' : '');
         if (m.variance_gal != null) {
             this._dom.edmVar.textContent = (m.variance_gal > 0 ? '+' : '') + m.variance_gal.toFixed(1) + ' gal';
@@ -559,7 +589,9 @@ class FuelOverlay {
 
         const d180 = this._resolveD180Fuel();
         if (d180 != null) {
-            this._dom.edmD180.textContent = `D-180: ${d180.toFixed(1)} gal`;
+            // Label at 700, the number a data value at 900 (.fo-edm-d180-val).
+            this._dom.edmD180.innerHTML =
+                `<span class="fo-edm-d180-lbl">D-180:</span> <span class="fo-edm-d180-val">${d180.toFixed(1)} gal</span>`;
             this._dom.edmD180.style.display = '';
         } else {
             this._dom.edmD180.textContent = '';
@@ -664,32 +696,30 @@ class FuelOverlay {
      * tracked total (null when nothing is tracked) and must be read before the tic
      * re-initialises FuelTankState; edm_gal is the D-180's own fuel figure when
      * fresh, else null. variance_gal / variance_pct / accuracy grade the tic
-     * against tracked_gal, as the comparison block shows.
+     * against tracked_gal + `addedGal` (the gallons pumped, for a fuel stop: the tic
+     * is taken after fuelling, tracked_gal before it).
      * For the K-factor (all read with tracked_gal, before the re-init):
      *   tracked_since  — FuelTankState.initialized_at that tracked_gal counts from
      *   tracked_stale  — tracked_gal was unconfirmed (needsConfirmation())
      *   dropped_applied_since_init_gal — applied dropped-burn gallons inside tracked_gal
-     * (null / null / 0 when nothing is tracked). The caller adds tank_init_at, the
-     * init this measurement creates, after FuelTankState.init().
+     *   flow_burn_since_init_gal — fuel-flow burn since tracked_since
+     *                    (burned_since_init_gal − dropped_applied_since_init_gal;
+     *                    null when the stored state predates burned_since_init_gal)
+     * (null / null / 0 / null when nothing is tracked). The caller adds tank_init_at,
+     * the init this measurement creates, after FuelTankState.init().
+     * @param {number} [addedGal=0] - gallons pumped (RECORD FUEL STOP), else 0
      */
-    _createRecordedMeasurement() {
+    _createRecordedMeasurement(addedGal = 0) {
         const tracked = this._trackedTotal();
-        const m = FuelEngine.createMeasurement(this._leftTic, this._rightTic, this._coefficients);
-        if (tracked) {
-            // createMeasurement() grades against its 4th argument but also stores that
-            // argument as edm_gal; take only the grading from it.
-            const graded = FuelEngine.createMeasurement(
-                this._leftTic, this._rightTic, this._coefficients, tracked.gal);
-            for (const k of ['variance_gal', 'variance_pct', 'accuracy']) {
-                if (graded[k] !== undefined) m[k] = graded[k];
-            }
-        }
+        const ref = tracked ? Math.round((tracked.gal + (addedGal > 0 ? addedGal : 0)) * 10) / 10 : null;
+        const m = FuelEngine.createMeasurement(
+            this._leftTic, this._rightTic, this._coefficients, this._resolveD180Fuel(), ref);
         m.tracked_gal = tracked ? tracked.gal : null;
         m.tracked_since = tracked ? tracked.since : null;
         m.tracked_stale = tracked ? tracked.stale : null;
         m.dropped_applied_since_init_gal = tracked ? tracked.droppedApplied : 0;
+        m.flow_burn_since_init_gal = tracked ? tracked.flowBurn : null;
         m.tank_init_at = null;
-        m.edm_gal = this._resolveD180Fuel();
         return m;
     }
 
@@ -777,7 +807,8 @@ class FuelOverlay {
             // re-initialises the tracked state. It also goes into flypi_fuel_history with
             // the pumped gallons (fuel_stop_gal), so the K-factor can count the leg that
             // ends at this stop: actual used = previous tic − (this tic − gallons pumped).
-            const m = this._createRecordedMeasurement();
+            // Graded against tracked + the gallons pumped (the tic is read after fuelling).
+            const m = this._createRecordedMeasurement(gallons);
             const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
             const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
             const existingTank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
@@ -806,6 +837,9 @@ class FuelOverlay {
             this._dom.addPrice.value = '';
             if (this._dom.addGalL) this._dom.addGalL.value = '';
             if (this._dom.addGalR) this._dom.addGalR.value = '';
+            // The FUEL ADDED box is empty again: the comparison block goes back to plain
+            // TRACKED (now the re-initialised tank state).
+            this._updateTrackedComparison();
 
             this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
         } catch (err) {
@@ -978,7 +1012,13 @@ class FuelOverlay {
             const newTic = parseFloat(tr.querySelector(`#fo-hist-tic-${origIdx}`).value);
             const newTrk = parseFloat(tr.querySelector(`#fo-hist-tracked-${origIdx}`).value);
             if (!isNaN(newTic)) m.total_gal = newTic;
-            if (!isNaN(newTrk)) m[ref] = newTrk;
+            if (!isNaN(newTrk)) {
+                // A corrected TRACKED figure must reach the K-factor, which otherwise
+                // prefers the recorded flow burn: drop that so the leg falls back to
+                // previous tic − TRACKED.
+                if (trkVal === '' || newTrk !== parseFloat(trkVal)) delete m.flow_burn_since_init_gal;
+                m[ref] = newTrk;
+            }
             history[origIdx] = m;
             this._saveHistory(history);
             this._renderHistory();
@@ -1011,9 +1051,13 @@ class FuelOverlay {
     /**
      * K-factor check from consecutive history entries (prev, next), sorted by time:
      *   actual used  = prev.total_gal − (next.total_gal − next.fuel_stop_gal)
-     *   tracked used = prev.total_gal − next.tracked_gal − next.dropped_applied_since_init_gal
-     *                  (flow-integrated burn only: an applied dropped-burn correction is
-     *                  an estimate and is added back)
+     *   tracked used = next.flow_burn_since_init_gal: the fuel-flow burn since the init
+     *                  prev created (counts burn charged to a tank already at 0, which
+     *                  the tank total cannot show; an applied dropped-burn correction
+     *                  is an estimate and is not in it). Records without that field
+     *                  (saved before it existed, or with TRACKED edited by hand) fall
+     *                  back to prev.total_gal − next.tracked_gal −
+     *                  next.dropped_applied_since_init_gal.
      * fuel_stop_gal is 0 for an APPLY TIC entry. Each leg is counted or excluded, in
      * this order (the first rule that applies names the exclusion):
      *   older      — next has no tracked_since key, prev no tank_init_at key (saved
@@ -1025,8 +1069,10 @@ class FuelOverlay {
      *   unconfirmed — next's tracked figure was stale (next.tracked_stale)
      *   unusable   — actual or tracked used is not positive (e.g. the tic rose with no
      *                fuel stop recorded)
-     *   outlier    — |tracked ÷ actual − 1| > KF_OUTLIER_FRAC (e.g. a partial top-off
-     *                recorded with APPLY TIC instead of RECORD FUEL STOP)
+     *   outlier    — with ≥ KF_MEDIAN_MIN_LEGS candidate legs (legs that passed every
+     *                rule above): |ratio ÷ median ratio − 1| > KF_OUTLIER_FRAC; with
+     *                fewer: |tracked ÷ actual − 1| > KF_OUTLIER_FRAC (e.g. a partial
+     *                top-off recorded with APPLY TIC instead of RECORD FUEL STOP)
      * Ratio = Σtracked ÷ Σactual over counted legs. Dynon's rule (FlightDEK-D180
      * Installation Guide p. 6-14: "if your GALS USED reads higher than you expect,
      * increase the K-factor"), so New K = Current K × Ratio.
@@ -1039,8 +1085,7 @@ class FuelOverlay {
             const t = new Date(v).getTime();
             return Number.isFinite(t) ? t : null;
         };
-        let history = [];
-        try { history = JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]'); } catch (_) { /* */ }
+        let history = this._loadHistory();
         if (!Array.isArray(history)) history = [];
         let stops = [];
         try { stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]'); } catch (_) { /* */ }
@@ -1049,6 +1094,7 @@ class FuelOverlay {
         const entries = history.filter(m => m && typeof m === 'object').map(m => {
             const stopGal = Number(m.fuel_stop_gal);
             const dropped = Number(m.dropped_applied_since_init_gal);
+            const flow = (m.flow_burn_since_init_gal == null) ? NaN : Number(m.flow_burn_since_init_gal);
             return {
                 ts: toMs(m.measured_at) ?? (Number.isFinite(m.ts) ? m.ts : 0),
                 tic: m.total_gal,
@@ -1061,6 +1107,7 @@ class FuelOverlay {
                 initAt: m.tank_init_at ?? null,
                 stale: m.tracked_stale === true,
                 dropped: Number.isFinite(dropped) && dropped > 0 ? dropped : 0,
+                flowBurn: Number.isFinite(flow) ? flow : null,
             };
         }).sort((a, b) => a.ts - b.ts);
 
@@ -1076,7 +1123,7 @@ class FuelOverlay {
         }
 
         const excluded = { older: 0, unusable: 0, reset: 0, unconfirmed: 0, outlier: 0 };
-        let actual = 0, tracked = 0, pairs = 0;
+        const candidates = [];
         for (let i = 1; i < entries.length; i++) {
             const prev = entries[i - 1];
             const next = entries[i];
@@ -1088,11 +1135,22 @@ class FuelOverlay {
             if (prev.initAt == null || next.since !== prev.initAt) { excluded.reset++; continue; }
             if (next.stale) { excluded.unconfirmed++; continue; }
             const a = prev.tic - (next.tic - next.stopGal);
-            const t = prev.tic - next.ref - next.dropped;
+            const t = next.flowBurn != null ? next.flowBurn : prev.tic - next.ref - next.dropped;
             if (!(a > 0) || !(t > 0)) { excluded.unusable++; continue; }
-            if (Math.abs(t / a - 1) > FuelOverlay.KF_OUTLIER_FRAC) { excluded.outlier++; continue; }
-            actual += a;
-            tracked += t;
+            candidates.push({ a, t, r: t / a });
+        }
+
+        let center = 1;
+        if (candidates.length >= FuelOverlay.KF_MEDIAN_MIN_LEGS) {
+            const rs = candidates.map(c => c.r).sort((x, y) => x - y);
+            const mid = Math.floor(rs.length / 2);
+            center = rs.length % 2 ? rs[mid] : (rs[mid - 1] + rs[mid]) / 2;
+        }
+        let actual = 0, tracked = 0, pairs = 0;
+        for (const c of candidates) {
+            if (Math.abs(c.r / center - 1) > FuelOverlay.KF_OUTLIER_FRAC) { excluded.outlier++; continue; }
+            actual += c.a;
+            tracked += c.t;
             pairs++;
         }
         return { actual, tracked, pairs, excluded };

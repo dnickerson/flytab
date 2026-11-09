@@ -125,3 +125,34 @@ describe('FuelState — single fuel source chain', () => {
         }
     });
 });
+
+describe('FuelState.measuredGallons() — the one "is this a measurement?" read (PR #214 finding 2)', () => {
+    it('tracked figure: { gallons, stale:false }', () => {
+        const FuelState = freshFuelState({ tankState: { left_gal: 8.5, right_gal: 7.2 } });
+        const m = FuelState.measuredGallons();
+        expect(m.gallons).toBeCloseTo(15.7, 5);
+        expect(m.stale).toBe(false);
+    });
+
+    it('stale tracked figure: stale true (the caller decides what to show)', () => {
+        const FuelState = freshFuelState({ tankState: { left_gal: 8, right_gal: 8 }, needsConfirmation: true });
+        expect(FuelState.measuredGallons()).toEqual({ gallons: 16, stale: true });
+    });
+
+    it('manual override: { gallons, stale:false }', () => {
+        const FuelState = freshFuelState({ manualOverride: 22 });
+        expect(FuelState.measuredGallons()).toEqual({ gallons: 22, stale: false });
+    });
+
+    it('capacity default: null (not a measurement)', () => {
+        const FuelState = freshFuelState();
+        expect(FuelState.measuredGallons()).toBeNull();
+    });
+
+    it('a throwing / non-finite read: null', () => {
+        const FuelState = freshFuelState({ tankState: { left_gal: NaN, right_gal: 1 } });
+        expect(FuelState.measuredGallons()).toBeNull();
+        FuelState.getCurrentFuel = () => { throw new Error('boom'); };
+        expect(FuelState.measuredGallons()).toBeNull();
+    });
+});

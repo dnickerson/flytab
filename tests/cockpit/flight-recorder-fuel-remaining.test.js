@@ -12,6 +12,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 
 const FlightRecorder = new Function(read('web/cockpit/flight-recorder.js') + '\nreturn FlightRecorder;')();
+// Real FuelState (measuredGallons() is what the recorder reads) with the fuel read stubbed.
+const RealFuelState = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
 
 function makeRecorder(piFuelRemaining) {
     const rec = Object.create(FlightRecorder.prototype);
@@ -31,8 +33,9 @@ function makeRecorder(piFuelRemaining) {
     return rec;
 }
 
-function cell(gal, source) {
-    globalThis.FuelState = { getCurrentFuel: () => ({ gallons: gal, source, stale: false }) };
+function cell(gal, source, stale = false) {
+    RealFuelState.getCurrentFuel = () => ({ gallons: gal, source, stale });
+    globalThis.FuelState = RealFuelState;
     const rec = makeRecorder(30);
     rec._recordRow();
     return rec._csvBuffer[0].split(',')[9]; // column 9 = Gallons Remaining, per CSV_HEADER
@@ -61,6 +64,14 @@ describe('FlightRecorder._recordRow Gallons Remaining', () => {
 
     it('is empty (not 36) when only the capacity default is known', () => {
         expect(cell(36, 'capacity')).toBe('');
+    });
+
+    it('is empty for a stale (UNCONFIRMED) tracked figure — it reads high, not a measurement', () => {
+        expect(cell(21.4, 'tank_state', true)).toBe('');
+    });
+
+    it('reads through FuelState.measuredGallons() (no private copy)', () => {
+        expect(read('web/cockpit/flight-recorder.js')).toMatch(/FuelState\.measuredGallons\(\)/);
     });
 
     it('is empty when FuelState is unavailable, never the Pi or EMS figure', () => {

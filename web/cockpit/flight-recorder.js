@@ -657,12 +657,15 @@ class FlightRecorder {
         const mlAnomaly = ml?.anomaly != null ? (ml.anomaly ? 1 : 0) : '';
         const mlLatency = ml?.latencyMs != null ? Math.round(ml.latencyMs) : '';
 
-        // Gallons Remaining = the tablet's tracked total (or the pilot's manual figure).
-        // Empty when only the capacity default is known: that is not a measurement.
+        // Gallons Remaining = the tablet's tracked total (or the pilot's manual figure),
+        // via FuelState.measuredGallons(). Empty when only the capacity default is
+        // known, or when the tracked figure is stale (UNCONFIRMED: it reads high):
+        // neither is a measurement.
         let tabletFuelGal = '';
         try {
-            const f = (typeof FuelState !== 'undefined') ? FuelState.getCurrentFuel() : null;
-            if (f && (f.source === 'tank_state' || f.source === 'manual') && Number.isFinite(f.gallons)) {
+            const f = (typeof FuelState !== 'undefined' && typeof FuelState.measuredGallons === 'function')
+                ? FuelState.measuredGallons() : null;
+            if (f && !f.stale) {
                 // 0.1 gal, written as a plain number like the old Pi column ('21.4', '15').
                 tabletFuelGal = Math.round(f.gallons * 10) / 10;
             }

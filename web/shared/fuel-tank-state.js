@@ -15,6 +15,9 @@ class FuelTankState {
     static CONFIRM_INTERVAL_MS = 30 * 60 * 1000;
     /** Cap dt between samples to avoid large jumps on reconnect */
     static MAX_SAMPLE_DT_MS = 10000;
+    /** markFlowLost(): with no current frame seen yet this session (app restart), the
+     *  engine counts as running if burn was integrated (last_burn_at) this recently. */
+    static RECENT_BURN_MS = 2 * 60 * 1000;
 
     static _state = null;
     static _loaded = false;
@@ -108,6 +111,14 @@ class FuelTankState {
             // measured flow, so the K-factor calculator subtracts them out of the
             // tracked burn. Absent in state stored before the field existed.
             dropped_applied_since_init_gal: 0,
+            // Set by markFlowLost() when fuel-flow data stops or freezes while the
+            // engine is running: burn is no longer integrated, so the figure reads
+            // high from that moment. Cleared by the next integrated sample (onSample)
+            // or a fresh init(). needsConfirmation() is true while it is set.
+            flow_lost_at: null,
+            // Time of the last sample that actually integrated burn (onSample only;
+            // init() and markConfirmed() do not set it, unlike last_sample_at).
+            last_burn_at: null,
         };
         FuelTankState._loaded = true;
         FuelTankState._save();
@@ -161,6 +172,10 @@ class FuelTankState {
         }
 
         FuelTankState._state.last_sample_at = new Date(nowMs).toISOString();
+        FuelTankState._state.last_burn_at = FuelTankState._state.last_sample_at;
+        // Flow is integrating again. Any burn during the gap was recorded above as
+        // dropped_burn_estimate_gal (the pilot's dropped-burn correction).
+        FuelTankState._state.flow_lost_at = null;
 
         const diff = Math.abs(FuelTankState._state.left_gal - FuelTankState._state.right_gal);
         FuelTankState._state.imbalance = (
@@ -285,6 +300,44 @@ class FuelTankState {
         return !!(FuelTankState._state && FuelTankState._state.dropped_burn_ambiguous);
     }
 
+    /**
+     * Fuel-flow data stopped (engine:stale / engine:disconnect) or froze (a frame
+     * that is not EngineClient.edmCurrent). If the engine was running, the tracked
+     * figure stops falling while fuel still burns, so it is marked at once
+     * (flow_lost_at → needsConfirmation() true) instead of 45 min later (STALE_MS).
+     * The engine counts as running when the last CURRENT frame this session had
+     * GPH > 0 (`lastCurrentGph`), or — with no current frame seen yet this session
+     * (`lastCurrentGph` null: app restarted with the data already frozen) — when burn
+     * was integrated within RECENT_BURN_MS. Engine off on the ground (last current
+     * GPH 0, or nothing integrated recently) is not marked.
+     * @param {number} nowMs
+     * @param {number|null} lastCurrentGph - GPH of the last current frame, null if none
+     * @returns {boolean} true if the state is (now) marked flow-lost
+     */
+    static markFlowLost(nowMs, lastCurrentGph) {
+        FuelTankState._load();
+        const st = FuelTankState._state;
+        if (!st) return false;
+        if (st.flow_lost_at) return true;
+        let running = lastCurrentGph > 0;
+        if (!running && lastCurrentGph == null && st.last_burn_at) {
+            const burnMs = new Date(st.last_burn_at).getTime();
+            running = Number.isFinite(burnMs) && (nowMs - burnMs) >= 0 &&
+                (nowMs - burnMs) <= FuelTankState.RECENT_BURN_MS;
+        }
+        if (!running) return false;
+        st.flow_lost_at = new Date(nowMs).toISOString();
+        FuelTankState._save();
+        FuelTankState._fire();
+        return true;
+    }
+
+    /** True while fuel-flow data is lost with the engine running (markFlowLost). */
+    static isFlowLost() {
+        FuelTankState._load();
+        return !!(FuelTankState._state && FuelTankState._state.flow_lost_at);
+    }
+
     /** Returns a copy of current state, or null if not initialized. */
     static getState() {
         FuelTankState._load();
@@ -294,17 +347,23 @@ class FuelTankState {
 
     /**
      * True if pilot confirmation is required before trusting state.
-     * True when: no state exists, requires_confirm flag is set, or last sample is stale.
+     * True when: no state exists, requires_confirm flag is set, the last sample is
+     * stale (STALE_MS), or fuel-flow data is lost with the engine running
+     * (flow_lost_at, markFlowLost). Only requires_confirm stops burn integration;
+     * flow_lost_at clears itself on the next integrated sample.
      */
     static needsConfirmation() {
         FuelTankState._load();
         FuelTankState._checkStaleness();
         if (!FuelTankState._state) return true;
-        return !!FuelTankState._state.requires_confirm;
+        return !!FuelTankState._state.requires_confirm || !!FuelTankState._state.flow_lost_at;
     }
 
     /** Pilot has confirmed the current state is accurate. */
     static markConfirmed() {
+        // Deliberately leaves flow_lost_at alone: this confirms the tank SELECTION
+        // ("Still on LEFT tank?" YES, also auto-fired after 60 s), not the quantity.
+        // Lost-flow marking clears only on the next integrated sample or init().
         FuelTankState._load();
         if (!FuelTankState._state) return;
         FuelTankState._state.requires_confirm = false;

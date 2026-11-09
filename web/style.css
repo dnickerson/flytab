@@ -6137,10 +6137,16 @@ body.fs-overlay-open .radar-loop-controls {
 .fo-edm-d180 {
     margin-top: 4px;
     text-align: center;
-    font-family: var(--font-instrument);
+    font-family: var(--font-ui);
     font-size: var(--text-sm);
     font-weight: 700;
     color: var(--text-secondary);
+}
+/* The D-180 number itself is a data value (CLAUDE.md: instrument values 900). */
+.fo-edm-d180-val {
+    font-family: var(--font-instrument);
+    font-weight: 900;
+    color: var(--text-primary);
 }
 .fo-grade-excellent { background: var(--color-success); color: #000; }
 .fo-grade-good { background: var(--color-caution); color: #000; }
@@ -6450,6 +6456,15 @@ body.fs-overlay-open .radar-loop-controls {
     padding: 2px 8px;
     border-radius: 3px;
     font-size: 14px;
+}
+/* TRACKED vs D-180: a stale tracked figure (reads high). Text on a light surface,
+   so the -on-light caution colour, not the fill token. */
+#ep-trk-total.ep-unconfirmed { color: var(--color-caution-on-light); }
+.ep-trk-unconf {
+    font-family: var(--font-ui);
+    font-weight: 800;
+    font-size: 14px;
+    color: var(--color-caution-on-light);
 }
 .ep-grade-excellent { background: var(--color-success); color: #000; }
 .ep-grade-good { background: var(--color-caution); color: #000; }
@@ -13336,4 +13351,39 @@ body:has(.checklist-page.visible) > .toast { z-index: 900; }
     font-size: var(--text-xs);
     font-weight: 700;
     color: var(--text-secondary);
+}
+
+/* Checklist item `link` (cockpit/checklist.js): a live status beside the response
+   and a button that opens the matching control. "fuel-tank" (Before Start, FlyTab
+   Tank): FlyTab's active tank; SET goes to the map and reveals the fuel tanks
+   widget, whose L / R badges set it. Same look as the VPN OPEN button. */
+.checklist-link-status {
+    flex-shrink: 0;
+    margin-left: 12px;
+    font-family: var(--font-instrument);
+    font-size: var(--text-md);
+    font-weight: 900;
+    color: var(--text-primary);
+}
+.checklist-link-btn {
+    flex-shrink: 0;
+    min-height: var(--touch-min, 56px);
+    min-width: 96px;
+    margin: 0 16px;
+    padding: 0 16px;
+    background: var(--accent);
+    color: var(--bg-primary);
+    border: none;
+    border-radius: 8px;
+    font-family: var(--font-ui);
+    font-size: var(--text-md);
+    font-weight: 800;
+    cursor: pointer;
+}
+
+/* Fuel tanks widget: badges highlighted by FuelTanksDisplay.revealTankControl()
+   (checklist FlyTab Tank → SET) so the pilot sees where to set the tank. */
+.ftw-badge.ftw-badge-attn {
+    outline: 4px solid var(--accent);
+    outline-offset: 2px;
 }

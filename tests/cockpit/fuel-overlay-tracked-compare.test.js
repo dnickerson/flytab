@@ -193,8 +193,11 @@ describe('measurement record', () => {
         const h = history();
         expect(h).toHaveLength(1);
         expect(h[0]).toMatchObject({ total_gal: 33.6, tracked_gal: 11, edm_gal: 10.2, fuel_stop_gal: 22 });
-        // Variance is graded against tracked; edm_gal is the D-180 figure, not the reference.
-        expect(h[0].variance_gal).toBe(22.6);
+        // PR #214 finding 5: a fuel stop is graded against tracked + pumped (11 + 22 = 33),
+        // not the pre-fuel tracked 11. edm_gal is the D-180 figure, not the reference.
+        expect(h[0].variance_gal).toBe(0.6);
+        expect(h[0].accuracy).toBe('excellent');
+        expect(h[0].tracked_gal).toBe(11);
         // The history list marks it as a fuel stop.
         const row = overlay._dom.histBody.querySelector('tr');
         expect(row.classList.contains('fo-hist-row-stop')).toBe(true);
@@ -367,5 +370,84 @@ describe('measurement history list', () => {
         oldRow.querySelector('.fo-hist-save').dispatchEvent(new window.MouseEvent('click'));
         expect(history()[0].edm_gal).toBe(30.5);
         expect(history()[0].tracked_gal).toBeUndefined();
+    });
+});
+
+describe('PR #214 finding 5: live TIC vs TRACKED with fuel-stop gallons entered', () => {
+    it('grades against tracked + the gallons in FUEL ADDED, labelled', () => {
+        FuelTankState.init(5, 6, 'L');                                 // 11.0 tracked
+        const d = open();
+        drag(d.leftSlider, 8);
+        drag(d.rightSlider, 11);                                        // tic 33.6
+        expect($('fo-edm-tracked-label').textContent).toBe('TRACKED');
+        expect($('fo-edm-var').textContent).toBe('+22.6 gal');
+
+        d.addGal.value = '22';
+        d.addGal.dispatchEvent(new window.Event('input'));
+        expect($('fo-edm-tracked-label').textContent).toBe('TRACKED + 22.0 ADDED');
+        expect($('fo-edm-tracked').textContent).toBe('33.0 gal');
+        expect($('fo-edm-var').textContent).toBe('+0.6 gal');
+        expect($('fo-edm-grade').textContent).toBe('EXCELLENT');
+
+        d.addGal.value = '';
+        d.addGal.dispatchEvent(new window.Event('input'));
+        expect($('fo-edm-tracked-label').textContent).toBe('TRACKED');
+        expect($('fo-edm-tracked').textContent).toBe('11.0 gal');
+    });
+
+    it('an invalid gallons entry (0, negative, text) is ignored', () => {
+        FuelTankState.init(5, 6, 'L');
+        const d = open();
+        drag(d.leftSlider, 8);
+        for (const v of ['0', '-3', 'abc']) {
+            d.addGal.value = v;
+            d.addGal.dispatchEvent(new window.Event('input'));
+            expect($('fo-edm-tracked-label').textContent).toBe('TRACKED');
+        }
+    });
+
+    it('a stale tracked figure plus added gallons still says UNCONFIRMED', () => {
+        FuelTankState.init(5, 6, 'L');
+        FuelTankState.needsConfirmation = () => true;
+        const d = open();
+        drag(d.leftSlider, 8);
+        d.addGal.value = '10';
+        d.addGal.dispatchEvent(new window.Event('input'));
+        expect($('fo-edm-tracked').textContent).toBe('21.0 gal (UNCONFIRMED)');
+    });
+});
+
+describe('PR #214 finding 9: one createMeasurement call per record', () => {
+    it('_createRecordedMeasurement calls FuelEngine.createMeasurement exactly once', () => {
+        FuelTankState.init(5, 6, 'L');
+        window.enginePanel = freshPanel({ Fuel_Remaining: 10.2 });
+        const d = open();
+        drag(d.leftSlider, 8);
+        const spy = vi.spyOn(FuelEngine, 'createMeasurement');
+        const m = overlay._createRecordedMeasurement();
+        expect(spy).toHaveBeenCalledTimes(1);
+        spy.mockRestore();
+        expect(m.edm_gal).toBe(10.2);
+        expect(m.tracked_gal).toBe(11);
+    });
+});
+
+describe('PR #214 finding 10: D-180 figure is a data value (font-weight 900)', () => {
+    it('the number sits in .fo-edm-d180-val, styled 900; the label stays 700/800', () => {
+        FuelTankState.init(8, 8, 'L');
+        window.enginePanel = freshPanel({ Fuel_Remaining: 12.5 });
+        const d = open();
+        drag(d.leftSlider, 8);
+        const line = $('fo-edm-d180');
+        expect(line.textContent).toBe('D-180: 12.5 gal');
+        expect(line.querySelector('.fo-edm-d180-val').textContent).toBe('12.5 gal');
+        const css = read('web/style.css');
+        const rule = (sel) => {
+            const m = css.match(new RegExp('\\n' + sel.replace(/[.-]/g, '\\$&') + '\\s*\\{([^}]*)\\}'));
+            return m ? m[1] : '';
+        };
+        expect(rule('.fo-edm-d180-val')).toMatch(/font-weight:\s*900/);
+        expect(rule('.fo-edm-d180-val')).toMatch(/font-family:\s*var\(--font-instrument\)/);
+        expect(rule('.fo-edm-d180')).toMatch(/font-weight:\s*(700|800)/);
     });
 });

@@ -86,6 +86,41 @@ describe('FuelEngine', () => {
             expect(m.edm_gal).toBeUndefined();
             expect(m.variance_pct).toBeUndefined();
         });
+
+        // PR #214 finding 9: the grading reference and edm_gal are separate parameters.
+        it('5th argument: grades against referenceGal; edm_gal is the 4th argument only', () => {
+            const flat = { a5: 0, a4: 0, a3: 0, a2: 0, a1: 1, a0: 0 };   // tic == gallons
+            const m = FuelEngine.createMeasurement(10, 10, flat, 12.5, 19);
+            expect(m.total_gal).toBe(20);
+            expect(m.edm_gal).toBe(12.5);
+            expect(m.variance_gal).toBe(1);                 // 20 − 19, not 20 − 12.5
+            expect(m.variance_pct).toBeCloseTo(5.3, 1);
+            expect(m.accuracy).toBe('good');
+        });
+
+        it('referenceGal given, no D-180 figure: edm_gal null, still graded', () => {
+            const flat = { a5: 0, a4: 0, a3: 0, a2: 0, a1: 1, a0: 0 };
+            const m = FuelEngine.createMeasurement(10, 10, flat, null, 20);
+            expect(m).toHaveProperty('edm_gal', null);
+            expect(m.variance_gal).toBe(0);
+            expect(m.accuracy).toBe('excellent');
+        });
+
+        it('referenceGal null / 0: not graded, edm_gal still recorded', () => {
+            const flat = { a5: 0, a4: 0, a3: 0, a2: 0, a1: 1, a0: 0 };
+            const m = FuelEngine.createMeasurement(10, 10, flat, 12.5, null);
+            expect(m.edm_gal).toBe(12.5);
+            expect(m.variance_gal).toBeUndefined();
+            expect(m.accuracy).toBeUndefined();
+            expect(FuelEngine.createMeasurement(10, 10, flat, null, 0).variance_gal).toBeUndefined();
+        });
+
+        it('4-argument form is unchanged (grades against the 4th argument)', () => {
+            const flat = { a5: 0, a4: 0, a3: 0, a2: 0, a1: 1, a0: 0 };
+            const m = FuelEngine.createMeasurement(10, 10, flat, 16);
+            expect(m.edm_gal).toBe(16);
+            expect(m.variance_gal).toBe(4);
+        });
     });
 
     describe('getAccuracyGrade', () => {

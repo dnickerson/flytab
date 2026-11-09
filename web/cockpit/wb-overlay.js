@@ -272,7 +272,7 @@ class WbOverlay {
             notice: fuelMissing
                 ? '⚠ FUEL NOT ENTERED — this weight excludes fuel. Enter gallons aboard.'
                 : fuelStale
-                    ? '⚠ FUEL QUANTITY UNCONFIRMED — tank tracking is over 45 min stale and reads high. Verify before using this weight.'
+                    ? '⚠ FUEL QUANTITY UNCONFIRMED — tank tracking is not current (engine data lost, or 45+ min without an update) and reads high. Verify before using this weight.'
                     : null,
         };
     }

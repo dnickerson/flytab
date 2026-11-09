@@ -36,14 +36,23 @@ class FuelEngine {
 
     /**
      * Create a fuel measurement from left and right tank tic marks.
-     * Optionally compares against an EDM (engine data monitor) reading.
+     *
+     * Two call forms:
+     *  - 4 arguments (legacy): `edmReading` is both stored as edm_gal and the figure
+     *    the tic is graded against (when > 0).
+     *  - 5 arguments: `referenceGal` is the grading figure (e.g. the tablet's tracked
+     *    fuel) and `edmReading` is only stored, as edm_gal (null when absent or ≤ 0).
+     *    Passing `referenceGal` explicitly (even null) selects this form.
+     * Grading (variance_gal, variance_pct, accuracy) happens only against a figure > 0.
      * @param {number} leftTic - Left tank tic mark reading
      * @param {number} rightTic - Right tank tic mark reading
      * @param {object} coefficients - Polynomial coefficients
-     * @param {number|null} edmReading - EDM total fuel reading in gallons (optional)
+     * @param {number|null} edmReading - the D-180 EMS fuel figure in gallons (optional)
+     * @param {number|null} [referenceGal] - figure to grade the tic against (optional)
      * @returns {object} Measurement with gallons per tank, total, variance
      */
-    static createMeasurement(leftTic, rightTic, coefficients = FuelEngine.DEFAULT_COEFFICIENTS, edmReading = null) {
+    static createMeasurement(leftTic, rightTic, coefficients = FuelEngine.DEFAULT_COEFFICIENTS,
+                             edmReading = null, referenceGal = undefined) {
         const leftGal = FuelEngine.ticToGallons(leftTic, coefficients);
         const rightGal = FuelEngine.ticToGallons(rightTic, coefficients);
         const totalGal = leftGal + rightGal;
@@ -58,10 +67,17 @@ class FuelEngine {
             total_gal: Math.round(totalGal * 10) / 10,
         };
 
-        if (edmReading != null && edmReading > 0) {
+        const separate = referenceGal !== undefined;
+        const ref = separate ? referenceGal : edmReading;
+        if (separate) {
+            measurement.edm_gal = (edmReading != null && edmReading > 0) ? edmReading : null;
+        } else if (edmReading != null && edmReading > 0) {
             measurement.edm_gal = edmReading;
-            measurement.variance_gal = Math.round((totalGal - edmReading) * 10) / 10;
-            measurement.variance_pct = Math.round(Math.abs(totalGal - edmReading) / edmReading * 1000) / 10;
+        }
+
+        if (ref != null && ref > 0) {
+            measurement.variance_gal = Math.round((totalGal - ref) * 10) / 10;
+            measurement.variance_pct = Math.round(Math.abs(totalGal - ref) / ref * 1000) / 10;
             measurement.accuracy = FuelEngine.getAccuracyGrade(measurement.variance_pct);
         }
 

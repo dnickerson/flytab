@@ -195,21 +195,29 @@ class EnginePanel {
         if (this._dom.pwr) this._dom.pwr.textContent = Math.round(pwr) + '%';
         this._setBar(this._dom.pwrBar, pwr);
 
-        // Tablet fuel (FuelState): tracked or manual gallons; 0 when only capacity is known.
-        let fuel = 0;
+        // Tablet fuel (FuelState.measuredGallons): tracked or manual gallons. Unknown
+        // (capacity default only) shows the panel's '—' placeholder, not 0.0; a stale
+        // tracked figure (UNCONFIRMED, reads high) carries a trailing '?' like the
+        // instrument strip and the fuel widget. Endurance follows the same rules.
+        let meas = null;
         try {
-            const f = (typeof FuelState !== 'undefined') ? FuelState.getCurrentFuel() : null;
-            if (f && f.source !== 'capacity') fuel = num(f.gallons);
-        } catch (_) { fuel = 0; }
-        if (this._dom.fuel) this._dom.fuel.textContent = fuel.toFixed(1) + ' gal';
+            meas = (typeof FuelState !== 'undefined' && typeof FuelState.measuredGallons === 'function')
+                ? FuelState.measuredGallons() : null;
+        } catch (_) { meas = null; }
+        const q = meas && meas.stale ? '?' : '';
+        if (this._dom.fuel) {
+            this._dom.fuel.textContent = meas ? `${meas.gallons.toFixed(1)}${q} gal` : '\u2014';
+        }
         const gph = num(d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0);
         if (this._dom.gph) this._dom.gph.textContent = gph.toFixed(1);
-        if (gph > 0 && fuel > 0) {
-            const totalMin = Math.round((fuel / gph) * 60);
+        let endur = '';
+        if (meas && gph > 0 && meas.gallons > 0) {
+            const totalMin = Math.round((meas.gallons / gph) * 60);
             const h = Math.floor(totalMin / 60);
             const m = totalMin % 60;
-            if (this._dom.fuelEndurance) this._dom.fuelEndurance.textContent = `${h}:${String(m).padStart(2, '0')} endur`;
+            endur = `${h}:${String(m).padStart(2, '0')}${q} endur`;
         }
+        if (this._dom.fuelEndurance) this._dom.fuelEndurance.textContent = endur;
 
         // ROP/LOP
         const ropLop = d.rop_lop ?? d.rop_lop_mode ?? d.mixture_mode ?? '';

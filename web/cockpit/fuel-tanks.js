@@ -18,6 +18,10 @@ class FuelTanksDisplay {
         this._confirmTimer = null;
         this._timerInterval = null;
         this._lastGph = 0;
+        // GPH of the last CURRENT engine frame this session; null until one arrives.
+        // Tells FuelTankState.markFlowLost() whether the engine was running when
+        // flow data stopped or froze.
+        this._lastCurrentGph = null;
         this._initPanelMode = null;   // 'preflight' | 'recovery' | null (panel closed)
         this._initPanelDirty = false;  // set to true while user is editing, prevents live updates from clobbering
         this._tankCapacity = 18;   // per side, updated from config on init
@@ -80,6 +84,22 @@ class FuelTanksDisplay {
         this._render();
     }
 
+    /**
+     * Checklist "FlyTab Tank" → SET: show the widget (even if hidden in the layer
+     * panel) and highlight the L / R badges, which set the active tank
+     * (_onBadgeTap → FuelTankState.switchTank).
+     */
+    revealTankControl() {
+        this.show();
+        const badges = [this._dom.badgeL, this._dom.badgeR].filter(Boolean);
+        badges.forEach(b => b.classList.add('ftw-badge-attn'));
+        if (this._attnTimer) clearTimeout(this._attnTimer);
+        this._attnTimer = setTimeout(() => {
+            badges.forEach(b => b.classList.remove('ftw-badge-attn'));
+            this._attnTimer = null;
+        }, FuelTanksDisplay.ATTN_MS);
+    }
+
     show() { if (this._el) { this._el.style.display = ''; try { localStorage.setItem('flypi_fuel_widget_visible', 'true');  } catch {} } }
     hide() { if (this._el) { this._el.style.display = 'none'; try { localStorage.setItem('flypi_fuel_widget_visible', 'false'); } catch {} } }
 
@@ -94,6 +114,7 @@ class FuelTanksDisplay {
         if (this._onConfirmPrompt) window.removeEventListener('fueltankstate:confirm_prompt', this._onConfirmPrompt);
         if (this._timerInterval) clearInterval(this._timerInterval);
         if (this._confirmTimer) clearTimeout(this._confirmTimer);
+        if (this._attnTimer) clearTimeout(this._attnTimer);
         if (this._mouseMoveHandler) document.removeEventListener('mousemove', this._mouseMoveHandler);
         if (this._mouseUpHandler)   document.removeEventListener('mouseup',   this._mouseUpHandler);
         if (this._dragHandle) {
@@ -119,17 +140,32 @@ class FuelTanksDisplay {
         // and endurance take the existing "no flow" rendering ('--') instead of
         // presenting the last reading as current.
         this._lastGph = edmCurrent ? gph : 0;
-        if (gph > 0 && edmCurrent) {
-            FuelTankState.onSample(gph, Date.now());
+        if (edmCurrent) {
+            const n = Number(gph);
+            this._lastCurrentGph = Number.isFinite(n) ? n : 0;
+            if (gph > 0) FuelTankState.onSample(gph, Date.now());
+        } else {
+            // Burn is not being integrated. If the engine was running, the tracked
+            // figure now reads high: mark it UNCONFIRMED at once (cleared by the next
+            // integrated sample).
+            FuelTankState.markFlowLost(Date.now(), this._lastCurrentGph);
         }
         this._updateSenderDisplay(d, edmCurrent);
         // Update endurance when GPH changes without a state change
         this._renderEndurance();
     }
 
-    /** Flow is unknown (no engine frames): GPH and endurance read '--'. */
+    /** Flow is unknown (no engine frames): GPH and endurance read '--', the s:
+     *  sender readouts 's:—' (same as a frozen frame), and — if the engine was
+     *  running — the tracked figure is marked UNCONFIRMED (FuelTankState.markFlowLost). */
     _clearFlow() {
         this._lastGph = 0;
+        for (const el of [this._dom.senderL, this._dom.senderR]) {
+            if (el && el.textContent !== '') el.textContent = 's:\u2014';
+        }
+        if (typeof FuelTankState !== 'undefined') {
+            FuelTankState.markFlowLost(Date.now(), this._lastCurrentGph);
+        }
         this._renderEndurance();
     }
 
@@ -271,8 +307,11 @@ class FuelTanksDisplay {
      * Tank badge tap
      * ----------------------------------------------------------------*/
     _onBadgeTap(tank) {
+        // getState() re-checks the 45-min staleness, so requires_confirm is current.
+        // Not needsConfirmation(): a lost fuel-flow feed (flow_lost_at) must not stop
+        // the pilot switching tanks in flight — the switch still has to be recorded.
         const state = FuelTankState.getState();
-        if (!state || FuelTankState.needsConfirmation()) {
+        if (!state || state.requires_confirm) {
             this._openInitDialog();
             return;
         }
@@ -628,3 +667,6 @@ class FuelTanksDisplay {
     }
 
 }
+
+/** How long revealTankControl() highlights the tank badges. */
+FuelTanksDisplay.ATTN_MS = 6000;
