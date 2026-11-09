@@ -4,21 +4,20 @@
 
 **Goal:** Every fuel-on-board figure FlyTab shows, records or plans with comes from the tablet's `FuelTankState`; the Pi supplies only fuel **flow** (and the Dynon EMS's own instrument readings), and FlyTab no longer writes fuel state to the Pi.
 
-**Architecture:** `FuelTankState` (`web/shared/fuel-tank-state.js`) already integrates burn and already feeds most displays through `FuelState.getCurrentFuel()`. This plan removes the remaining readers of the Pi's legacy `FuelTracker` (`data.fuel.*`), removes the four tablet→Pi fuel writes and their retry UI, moves the K-factor ratio onto tablet data, and closes the one integration gap that matters once the tablet is the only source (burning a frozen fuel-flow value). The Pi code is left in place, unused.
+**Architecture:** `FuelTankState` (`web/shared/fuel-tank-state.js`) already integrates burn and already feeds most displays through `FuelState.getCurrentFuel()`. This plan removes the remaining readers of the Pi's legacy `FuelTracker` (`data.fuel.*`), removes the four tablet→Pi fuel writes and their retry UI, moves the K-factor ratio onto tablet data, closes the one integration gap that matters once the tablet is the only source (burning a frozen fuel-flow value), and finally removes the Pi's FuelTracker itself (Task 6, contract bump).
 
 **Tech Stack:** vanilla JS classic scripts (`web/`), vitest (`tests/`), `bash build.sh`.
 
 **Spec:** Dana, 2026-11-08: *"Syncing to the pi was a legacy design. Fuel measurement should be on the flytab."* Facts below are from origin/main `53d1efd`. Background: `docs/superpowers/specs/2026-07-31-fuel-management-consistency-design.md` (made FuelTankState canonical for displays).
 
-## Decisions Needed Before Execution (Dana)
+## Decisions (Dana, 2026-11-09)
 
-Each has a recommendation; the tasks below are written to the recommendation.
-
-- **D1 — Pi side.** Leave the Pi's FuelTracker and `/api/fuel/*` running but unused (no deploy, no `PI_API_CONTRACT` change, since the wire shape is unchanged). *Recommended.* Alternative: a separate Pi cleanup later.
-- **D2 — "Dynon EMS" vs "Pi tracker".** Two different things share the word "EDM" today. The Dynon EMS fields the Pi merely forwards (`data.Fuel_Remaining` = the D-180's own fuel computer, `data.Fuel_Left/Fuel_Right` = tank senders) are **instrument readings and stay**. Only the Pi's own integration (`data.fuel.*`: `fuel_remaining`, `flight_fuel_used`, `edm_fuel_left/right`, `warnings`) is removed as a fuel source. *Recommended.*
-- **D3 — ENG page USED.** "USED (FLIGHT)" reads the Pi's `flight_fuel_used`. Replace with **USED (SINCE FUEL SET)** = gallons burned since the last tic measurement / fuel stop, from FuelTankState. *Recommended* (a per-flight counter would need engine-start detection on the tablet — out of scope).
-- **D4 — Dropped burn** (burn during data gaps > 10 s, already an advisory with APPLY CORRECTION): keep it pilot-confirmed, now applied on the tablet only. *Recommended* — auto-apply is a separate decision (open since 2026-09-07).
-- **D5 — Low-fuel alerting.** Nothing on the tablet raises a low-fuel alarm today, and nothing reads the Pi's warnings — so removing the Pi changes nothing, but the gap is real. *Recommended:* a separate plan; not in this one.
+- **D1 — Pi side: REMOVE the Pi fuel code** (FuelTracker, KFactorCalibration, FUEL_CONFIG, every `/api/fuel/*` endpoint, the status `fuel` block, the `fuel_tracker` capability). The wire shape changes, so `PI_API_CONTRACT` 2→3 and `EngineClient.MIN_PI_CONTRACT` 2→3 (CLAUDE.md bump discipline). Task 6, last — after no tablet code reads `data.fuel`.
+- **D2 — Keep the D-180's fuel computer.** The Dynon EMS fields the Pi merely forwards (`data.Fuel_Remaining` = the D-180's own fuel computer, `data.Fuel_Left/Fuel_Right` = tank senders) are instrument readings and **stay** (parsed in `parse_line`, untouched by Task 6). Only the Pi's own integration (`data.fuel.*`) goes.
+- **D3 — ENG page gauge labelled "USED"**: gallons burned since the last tic measurement / fuel stop, from FuelTankState (replaces the Pi's `flight_fuel_used` "USED (FLIGHT)"). The manual says what it counts from.
+- **D4 — Dropped burn** stays pilot-confirmed (APPLY CORRECTION), applied on the tablet only.
+- **D5 — Low-fuel alerting**: a separate plan; not in this one.
+- **Execution:** subagent-driven.
 
 ## Global Constraints
 
@@ -108,7 +107,7 @@ Each has a recommendation; the tasks below are written to the recommendation.
 - [ ] **Step 4: Run** — PASS; `npm test` — PASS.
 - [ ] **Step 5: Commit** `feat(fuel): compare tic with tracked fuel; K-factor from tablet data` with manual (K-Factor ~783-785, TIC vs EDM ~253, and a short description of the comparison block, which the manual lacks today).
 
-### Task 5: Remaining Pi-tracker readers → tablet
+### Task 5: Remaining Pi-tracker readers → tablet (label per D3: "USED")
 
 **Files:**
 - Modify: `web/cockpit/engine-page.js` USED gauge (545, 632) and its label; `web/cockpit/flight-recorder.js:663`; `web/cockpit/fuel-tanks.js` `_updateSenderDisplay` (519-535); `web/cockpit/engine-panel.js:198-208`; `web/cockpit/engine-ml.js:244,390`; `web/shared/fuel-engine.js` `extractEdmFuel` (87-98).
@@ -119,7 +118,7 @@ Each has a recommendation; the tasks below are written to the recommendation.
 
 - [ ] **Step 1: Failing tests:**
   - fuel-tank-state: `it('burned_since_init_gal counts burn and applied dropped burn; init resets it')`.
-  - engine-page: `it('USED (SINCE FUEL SET) shows burned_since_init_gal, not data.fuel.flight_fuel_used')`; old state without the field → `—`.
+  - engine-page: `it('USED shows burned_since_init_gal, not data.fuel.flight_fuel_used')` (label text exactly `USED`); old state without the field → `—`.
   - flight-recorder: `it('Gallons Remaining column is the tablet-tracked total')` (`FuelState.getCurrentFuel` stub 21.4, Pi `fuel.fuel_remaining` 30 → `21.4`; capacity source → empty cell, not 36).
   - fuel-tanks sender: reads `d.Fuel_Left/Fuel_Right` (EMS), not `d.fuel.edm_fuel_left/right`.
   - fuel-engine: `it('extractEdmFuel ignores data.fuel.* (Pi tracker)')` → `{ fuel: { fuel_remaining: 30 }, Fuel_Remaining: 12.5 }` gives `12.5`.
@@ -130,7 +129,25 @@ Each has a recommendation; the tasks below are written to the recommendation.
 
 ---
 
+### Task 6: Remove the Pi fuel tracker (D1)
+
+**Files:**
+- Modify: `engine-monitor/engine_monitor.py`: delete `FUEL_CONFIG` (~115-149), `KFactorCalibration` (151-241), `FuelTracker` (244-~720), `state.fuel_tracker` (781, 2753-2754), the update call in the serial loop (~1863-1875), the status `'fuel'` key (2228), the `/api/fuel` GET routes (2391-2410) and POST routes (2473-2568); `PI_API_CONTRACT = 3` with a comment line naming this change; `PI_CAPABILITIES` without `"fuel_tracker"`.
+- Delete: `engine-monitor/test_fuel_tracker.py`.
+- Modify: `web/shared/engine-client.js:81` `MIN_PI_CONTRACT = 3`.
+- Test: `engine-monitor/test_status_contract.py` (new, plain `python3 -m pytest` or `unittest`, whichever the existing Pi tests use); `tests/shared/engine-client.test.js` (contract).
+
+**Interfaces:** Consumes Tasks 1-5 (nothing on the tablet reads `data.fuel` or `/api/fuel/*` — verified by grep in Step 2). Produces: status JSON has no `fuel` key; `api_contract: 3`; `capabilities` = `["peak_egt", "gps_fix_quality"]`; `data.Fuel_Remaining`, `Fuel_Left`, `Fuel_Right`, `Fuel_Flow` unchanged.
+
+- [ ] **Step 1: Failing tests:** Pi — `test_status_has_no_fuel_block` (`'fuel' not in get_status()`), `test_contract_is_3`, `test_capabilities_drop_fuel_tracker`, `test_dynon_fuel_fields_still_parsed` (a real EMS line from an existing fixture → `Fuel_Remaining`, `Fuel_Left`, `Fuel_Right`, `Fuel_Flow` present), `test_fuel_endpoints_gone` (`/api/fuel`, `/api/fuel/set` → 404). Tablet — `MIN_PI_CONTRACT === 3`, and a contract-2 Pi shows the update badge (`piContractBehind`).
+- [ ] **Step 2: Run** them — FAIL. Also `git grep -n "data\.fuel\|/api/fuel\|fuel_tracker" web/ tests/` → only the lines this task deletes.
+- [ ] **Step 3: Implement** the deletions and bumps. Do not touch `parse_line`, `Fuel_Flow` handling, `state.sfc`/peak-EGT code, or `FIELD_NAMES`. Leave the Pi's old `fuel_data.json` files in place (unused; no data loss).
+- [ ] **Step 4: Run** — Pi tests PASS (`cd engine-monitor && python3 -m pytest -q`), `npm test` PASS.
+- [ ] **Step 5: Commit** `feat(pi): remove the Pi fuel tracker (contract 3)`; CLAUDE.md "Pi ↔ FlyTab contract" paragraph updated (currently 3, fuel tracker removed); manual line(s) that mention the Pi's fuel tracker. **Deploy note for Dana:** run `bash deploy-pi.sh` after installing this build — until then the status bar shows the Pi-update badge (contract 2 < 3), and nothing fuel-related depends on the Pi any more. Bump version; `bash build.sh`.
+
+---
+
 ## Not in this plan
 
-- Pi FuelTracker removal (D1), tablet low-fuel alerting (D5), dropped-burn auto-apply (D4), engine-ml `distance_nm` TODO (makes the route-fuel advisory live).
+- Tablet low-fuel alerting (D5), dropped-burn auto-apply (D4), engine-ml `distance_nm` TODO (makes the route-fuel advisory live), deleting the Pi's old `fuel_data.json`.
 - Tablet testing: the fuel overlay, ENG page and widget must be checked on the tablet with the Pi on and off before calling it done (no automated UI coverage).
