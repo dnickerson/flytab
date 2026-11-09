@@ -100,7 +100,11 @@ class FuelTanksDisplay {
         const d = data.data ? { ...data, ...data.data } : data;
         const gph = d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0;
         this._lastGph = gph;
-        if (gph > 0) {
+        // Burn only from a CURRENT EDM row. The Pi keeps resending its last row after
+        // the EDM goes quiet, so a frozen frame must not keep integrating burn.
+        // Same rule engine-ml.js uses. A gap is handled by onSample's dt logic on resume.
+        const edmCurrent = typeof EngineClient === 'undefined' || EngineClient.edmCurrent(d);
+        if (gph > 0 && edmCurrent) {
             FuelTankState.onSample(gph, Date.now());
         }
         this._updateSenderDisplay(d);
