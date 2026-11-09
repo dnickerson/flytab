@@ -2840,7 +2840,8 @@ class RouteTable {
         if (mode !== 'home' && mode !== 'internet') return;
 
         const points = this._cloudSamplePoints();
-        if (points.length < 2) return;
+        // No route to fetch for: an older request for the previous route must not save either.
+        if (points.length < 2) { this._cloudWanted = null; return; }
 
         const hash = cloudRouteHash(points);
         this._cloudStore = this._cloudStore || new CloudForecastStore();
@@ -2849,20 +2850,26 @@ class RouteTable {
         //   another route must not save over it (even when this call needs no fetch);
         this._cloudWanted = hash;
         const now = Date.now();
-        // - one request at a time per route, claimed before the first await (same-tick calls); each claim
-        //   is its own object, so a finished older request for the same route cannot release a newer
-        //   one's claim; a claim older than 90 s (IndexedDB can hang: open() never settles) expires;
-        const held = this._cloudInFlight;
-        if (held && held.hash === hash && now - held.at < 90000) return;
-        // - after a failure back off (updateLive calls this every second): 60 s, 5 min after a 429
-        //   (Open-Meteo's per-IP allowance, shared with the model winds); a retry is scheduled;
+        // - one request at a time per route (a claim per route, so A->B->A does not fire a second A),
+        //   claimed before the first await (same-tick calls); a claim older than 150 s -- longer than a
+        //   request can take (3 s store read + RRFS and GFS at 15+30 s each) -- expires: IndexedDB can
+        //   hang (open() never settles) and must not block this route for the session;
+        this._cloudClaims = this._cloudClaims || new Map();
+        const held = this._cloudClaims.get(hash);
+        if (held && now - held.at < 150000) return;
+        // - back off after a failure (edits can come in bursts): 60 s doubling per failure in a row,
+        //   5 min after a 429 (Open-Meteo's per-IP allowance, shared with the model winds); see
+        //   _scheduleCloudRetry for the retry;
         if (now < (this._cloudRetryAfter || 0)) { this._scheduleCloudRetry(); return; }
-        const claim = { hash, at: now };
-        this._cloudInFlight = claim;
+        const claim = { at: now };
+        this._cloudClaims.set(hash, claim);
+        const isCurrent = () => this._cloudWanted === hash;
         try {
             // - freshness from the STORED record (cloudStaleness: the WX chip's own thresholds), so it
-            //   survives a restart; a negative age (the clock moved back) counts as stale;
+            //   survives a restart; a negative age (the clock moved back) counts as stale. IndexedDB too
+            //   slow to answer (undefined) is not "nothing stored": skip this time;
             const rec = await this._cloudStore.current();
+            if (rec === undefined) return;
             const age = rec ? Date.now() - Date.parse(rec.fetchedAt) : NaN;
             const staleness = Number.isFinite(age) && age >= 0 ? cloudStaleness(age) : 'expired';
             const sameRoute = !!rec && rec.routeHash === hash;
@@ -2870,22 +2877,34 @@ class RouteTable {
             // - refreshing an RRFS forecast still under 3 h old ('aging') asks RRFS only, so a hiccup cannot
             //   swap it for GFS; older than that, GFS is allowed (a stale RRFS must not block a fresh GFS).
             const rrfsOnly = sameRoute && rec.model === 'RRFS' && staleness === 'aging';
-            const saved = await this._cloudStore.fetchAndStore(points, { rrfsOnly, isCurrent: () => this._cloudWanted === hash });
-            this._cloudRetryAfter = 0;
-            if (saved) window.DiagLog?.log('cloud', `forecast cached — ${points.length} pts (${saved.model})`);
+            const saved = await this._cloudStore.fetchAndStore(points, { rrfsOnly, isCurrent });
+            // A superseded request (null) neither clears nor sets the back-off.
+            if (saved) {
+                this._cloudRetryAfter = 0;
+                this._cloudFailures = 0;
+                window.DiagLog?.log('cloud', `forecast cached — ${points.length} pts (${saved.model})`);
+            }
         } catch (e) {
-            this._cloudRetryAfter = Date.now() + (e?.status === 429 ? 5 * 60000 : 60000);
-            this._scheduleCloudRetry();
+            // A 429 is the whole IP's allowance: always back off. Any other failure counts only for the
+            // route still wanted (a superseded request's timeout must not hold back the next route).
+            if (e?.status === 429 || isCurrent()) {
+                this._cloudFailures = (this._cloudFailures || 0) + 1;
+                this._cloudRetryAfter = Date.now() + (e?.status === 429
+                    ? 5 * 60000 : Math.min(60000 * 2 ** (this._cloudFailures - 1), 30 * 60000));
+                // At most 3 failures in a row are retried by timer; after that only a load or edit tries
+                // again (a failure that never succeeds, e.g. a route no model covers, must not poll).
+                if (this._cloudFailures <= 3) this._scheduleCloudRetry();
+            }
             window.DiagLog?.log('cloud', `forecast fetch failed: ${e?.message}`);
         } finally {
-            if (this._cloudInFlight === claim) this._cloudInFlight = null;
+            if (this._cloudClaims.get(hash) === claim) this._cloudClaims.delete(hash);
         }
     }
 
     /** One timer to try the cloud fetch again when its back-off ends (a route loaded during the
-     *  back-off, with no Stratux feed calling updateLive, would otherwise never be fetched). */
+     *  back-off would otherwise wait for the next load or edit). */
     _scheduleCloudRetry() {
-        if (this._cloudRetryTimer) return;
+        if (this._cloudRetryTimer || (this._cloudFailures || 0) > 3) return;
         const wait = Math.max(0, (this._cloudRetryAfter || 0) - Date.now()) + 1000;
         this._cloudRetryTimer = setTimeout(() => { this._cloudRetryTimer = null; this._refreshCloudForecast(); }, wait);
     }

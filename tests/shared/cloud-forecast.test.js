@@ -541,11 +541,25 @@ describe('fetchAndStore: a superseded request stops before the GFS fallback (rev
         expect(await p).toBeNull();
         expect(calls).toEqual(['ncep_rrfs_conus']);
     });
-    it('current(): the stored record, or null if IndexedDB does not answer within the limit', async () => {
+    it('current(): the stored record, or undefined if IndexedDB does not answer within the limit', async () => {
         const s = new CloudForecastStore();
         s.load = () => new Promise(() => {});
-        expect(await s.current(20)).toBeNull();
+        expect(await s.current(20)).toBeUndefined();
         s._data = { routeHash: 'x' };
         expect(await s.current(20)).toEqual({ routeHash: 'x' });
+    });
+});
+
+describe('current() (review of 35ca27f): one shared read; undefined when IndexedDB is too slow', () => {
+    it('slow: undefined (not null = nothing stored); several calls share one load()', async () => {
+        const s = new CloudForecastStore();
+        let loads = 0; s.load = () => { loads++; return new Promise(() => {}); };
+        const [a, b] = await Promise.all([s.current(20), s.current(20)]);
+        expect(a).toBeUndefined(); expect(b).toBeUndefined();
+        expect(loads).toBe(1);
+    });
+    it('nothing stored: null', async () => {
+        const s = new CloudForecastStore(); s.load = async () => null;
+        expect(await s.current(20)).toBeNull();
     });
 });

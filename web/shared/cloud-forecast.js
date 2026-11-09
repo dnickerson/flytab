@@ -418,14 +418,23 @@ class CloudForecastStore {
         throw lastErr || new Error('Cloud fetch failed');
     }
 
-    /** The stored record, or null when there is none or IndexedDB does not answer within timeoutMs
-     *  (a blocked open never settles -- see open()). */
+    /** The stored record; null when there is none; undefined when IndexedDB does not answer within
+     *  timeoutMs (a blocked open never settles -- see open()). Callers must not read undefined as
+     *  "nothing stored". Concurrent calls share one pending load(). */
     async current(timeoutMs = 3000) {
         if (this._data) return this._data;
-        return Promise.race([
-            this.load().catch(() => null),
-            new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
-        ]);
+        if (!this._loading) {
+            this._loading = this.load().catch(() => null).finally(() => { this._loading = null; });
+        }
+        let timer;
+        try {
+            return await Promise.race([
+                this._loading,
+                new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), timeoutMs); }),
+            ]);
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
     /** Cache-only read. Returns null when there is nothing usable. */
