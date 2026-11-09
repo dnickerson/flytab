@@ -177,30 +177,123 @@ describe('_cloudSamplePoints — coordinate completeness guard', () => {
     });
 });
 
-describe('_refreshCloudForecast: same route refetched once the stored forecast is over an hour old', () => {
-    const route = () => straightRoute([30, 30]);
-    let fetches;
+describe('_refreshCloudForecast (review of #213): freshness from the stored record, one fetch at a time, newest wins, 429 back-off', () => {
+    const route = (lat0 = 40) => {
+        const r = straightRoute([30, 30]);
+        r.forEach((w) => { w.lat += lat0 - 40; });
+        return r;
+    };
+    const hashOf = (rt) => globalThis.cloudRouteHash(rt._cloudSamplePoints());
+    let calls, pending, stored;
+    /** A store whose fetches resolve when the test says so; saves only when opts.isCurrent() allows. */
+    class FakeStore {
+        constructor() { this._data = stored; }
+        async load() { this._data = stored; return stored; }
+        fetchAndStore(points, opts = {}) {
+            const call = { points, opts };
+            calls.push(call);
+            return new Promise((resolve, reject) => {
+                call.resolve = (model = 'RRFS') => {
+                    if (opts.isCurrent && !opts.isCurrent()) return resolve(null);
+                    stored = { routeHash: globalThis.cloudRouteHash(points), fetchedAt: new Date().toISOString(), model };
+                    this._data = stored;
+                    resolve(stored);
+                };
+                call.reject = reject;
+                pending.push(call);
+            });
+        }
+    }
+    const flush = () => new Promise((r) => setTimeout(r, 0));
     beforeEach(() => {
-        fetches = 0;
+        calls = []; pending = []; stored = null;
         globalThis.app = { networkMode: { mode: 'home' } };
         globalThis.cloudRouteHash = (pts) => pts.map((p) => `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`).join('|');
-        globalThis.CloudForecastStore = class { async fetchAndStore() { fetches++; } };
+        globalThis.CloudForecastStore = FakeStore;
         vi.useFakeTimers({ now: T0, toFake: ['Date'] });
     });
     afterEach(() => { vi.useRealTimers(); delete globalThis.app; delete globalThis.CloudForecastStore; delete globalThis.cloudRouteHash; });
 
-    it('not again within the hour; again after it (it used to wait for a route change or a restart)', async () => {
+    it('the same route is fetched again only once its stored forecast is over an hour old', async () => {
         const rt = makeTable(route());
+        const p = rt._refreshCloudForecast(); await flush(); calls[0].resolve(); await p;
         await rt._refreshCloudForecast();
-        await rt._refreshCloudForecast();
-        expect(fetches).toBe(1);
+        expect(calls).toHaveLength(1);
         vi.setSystemTime(T0 + 61 * 60_000);
-        await rt._refreshCloudForecast();
-        expect(fetches).toBe(2);
+        const p2 = rt._refreshCloudForecast(); await flush(); calls[1].resolve(); await p2;
+        expect(calls).toHaveLength(2);
     });
+
+    it('after a restart (new table) a stored forecast 2 min old for this route is used, not refetched', async () => {
+        const rt0 = makeTable(route());
+        stored = { routeHash: hashOf(rt0), fetchedAt: new Date(T0 - 2 * 60_000).toISOString(), model: 'RRFS' };
+        await makeTable(route())._refreshCloudForecast();
+        expect(calls).toHaveLength(0);
+    });
+
+    it('a stored forecast "from the future" (clock moved back) counts as stale', async () => {
+        const rt = makeTable(route());
+        stored = { routeHash: hashOf(rt), fetchedAt: new Date(T0 + 3 * 3600_000).toISOString(), model: 'RRFS' };
+        const p = rt._refreshCloudForecast(); await flush();
+        expect(calls).toHaveLength(1);
+        calls[0].resolve(); await p;
+    });
+
+    it('two overlapping refreshes for the same route: one request', async () => {
+        const rt = makeTable(route());
+        const a = rt._refreshCloudForecast(); await flush();
+        const b = rt._refreshCloudForecast(); await flush();
+        expect(calls).toHaveLength(1);
+        calls[0].resolve(); await Promise.all([a, b]);
+    });
+
+    it('two refreshes in the same tick (before either has read the store): still one request', async () => {
+        const rt = makeTable(route());
+        const a = rt._refreshCloudForecast(), b = rt._refreshCloudForecast();
+        await flush(); await flush();
+        expect(calls).toHaveLength(1);
+        calls[0].resolve(); await Promise.all([a, b]);
+    });
+
+    it('route A (slow) then B: A finishing last does not overwrite B in the cache', async () => {
+        const rt = makeTable(route(40));
+        const a = rt._refreshCloudForecast(); await flush();          // A starts
+        rt._waypoints = route(42);
+        const b = rt._refreshCloudForecast(); await flush();          // B starts
+        const hashB = hashOf(rt);
+        calls[1].resolve(); await b;                                  // B lands
+        calls[0].resolve(); await a;                                  // A lands late
+        expect(stored.routeHash).toBe(hashB);
+    });
+
+    it('a 429: no further requests for 5 minutes, then again', async () => {
+        const rt = makeTable(route());
+        const p = rt._refreshCloudForecast(); await flush();
+        calls[0].reject(Object.assign(new Error('Cloud fetch failed (RRFS): 429'), { status: 429 })); await p;
+        await rt._refreshCloudForecast(); await rt._refreshCloudForecast();
+        expect(calls).toHaveLength(1);
+        vi.setSystemTime(T0 + 5 * 60_000 + 1);
+        const p2 = rt._refreshCloudForecast(); await flush();
+        expect(calls).toHaveLength(2);
+        calls[1].resolve(); await p2;
+    });
+
+    it('refreshing a good RRFS forecast for the same route asks RRFS only (no downgrade to GFS on a hiccup)', async () => {
+        const rt = makeTable(route());
+        stored = { routeHash: hashOf(rt), fetchedAt: new Date(T0 - 2 * 3600_000).toISOString(), model: 'RRFS' };
+        const p = rt._refreshCloudForecast(); await flush();
+        expect(calls[0].opts.rrfsOnly).toBe(true);
+        calls[0].resolve(); await p;
+        // a different route, or an old GFS cache: both models allowed
+        rt._waypoints = route(43);
+        const p2 = rt._refreshCloudForecast(); await flush();
+        expect(calls[1].opts.rrfsOnly).toBeFalsy();
+        calls[1].resolve(); await p2;
+    });
+
     it('away from home/internet: never', async () => {
         globalThis.app.networkMode.mode = 'stratux';
         await makeTable(route())._refreshCloudForecast();
-        expect(fetches).toBe(0);
+        expect(calls).toHaveLength(0);
     });
 });

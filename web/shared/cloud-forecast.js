@@ -373,21 +373,41 @@ class CloudForecastStore {
     /**
      * Ground use only. RRFS, else GFS when RRFS refuses or has no cloud values. Throws on failure
      * (the caller keeps the old cache); a network failure is not retried with the next model.
+     *   opts.rrfsOnly   no GFS fallback (refreshing a good RRFS forecast: a hiccup must not downgrade it)
+     *   opts.isCurrent  () => bool, checked when the answer lands: false -> not saved, returns null
+     *                   (an older, slower request must not overwrite the newer route's forecast)
+     * A refusal throws an Error with .status (429: over Open-Meteo's per-IP allowance, shared with
+     * the model-winds fetch -- the next model would be refused too, so it stops).
      */
-    async fetchAndStore(points) {
+    async fetchAndStore(points, opts = {}) {
+        const models = opts.rrfsOnly ? CLOUD_MODELS.slice(0, 1) : CLOUD_MODELS;
         let lastErr = null;
-        for (const m of CLOUD_MODELS) {
-            const resp = await fetch(cloudBuildUrl(points, m.id), { signal: AbortSignal.timeout(30000) });
+        for (const m of models) {
+            // 15 s until the response starts, then 30 s for the body (one limit for both also cut off a
+            // slow body download -- the model-winds review, #212).
+            const ctl = new AbortController();
+            let timer = setTimeout(() => ctl.abort(), 15000);
+            let resp, json;
+            try {
+                resp = await fetch(cloudBuildUrl(points, m.id), { signal: ctl.signal });
+            } finally {
+                clearTimeout(timer);
+            }
             if (!resp.ok) {
-                lastErr = new Error(`Cloud fetch failed (${m.label}): ${resp.status} ${resp.statusText}`);
-                // Over Open-Meteo's per-IP allowance (shared with the model-winds fetch): the next model is refused too.
+                lastErr = Object.assign(new Error(`Cloud fetch failed (${m.label}): ${resp.status} ${resp.statusText}`), { status: resp.status });
                 if (resp.status === 429) throw lastErr;
                 continue;
             }
-            const json = await resp.json();
+            timer = setTimeout(() => ctl.abort(), 30000);
+            try {
+                json = await resp.json();
+            } finally {
+                clearTimeout(timer);
+            }
             const series = Array.isArray(json) ? json : [json];
             if (!series[0]?.hourly?.time?.length) { lastErr = new Error(`Cloud fetch returned no hourly data (${m.label})`); continue; }
             if (!cloudHasData(json)) { lastErr = new Error(`Cloud fetch: no cloud values (${m.label})`); continue; }
+            if (opts.isCurrent && !opts.isCurrent()) return null;
             const record = cloudNormalize(json, points, m.label);
             await this._save(record);
             return record;

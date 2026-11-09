@@ -499,3 +499,31 @@ describe('cloud fetch: a 429 stops (no GFS request on top) and says RRFS was ref
         expect(calls).toEqual(['ncep_rrfs_conus']);
     });
 });
+
+describe('fetchAndStore options (review of #213): rrfsOnly, isCurrent, 429 status', () => {
+    afterEach(() => { delete globalThis.fetch; });
+    const answer = (byModel) => { const calls = []; globalThis.fetch = async (url) => {
+        const m = new URL(url).searchParams.get('models'); calls.push(m);
+        const v = byModel[m];
+        if (typeof v === 'number') return { ok: false, status: v, statusText: 'x', json: async () => ({}) };
+        return { ok: true, status: 200, json: async () => v };
+    }; return calls; };
+    it('rrfsOnly: RRFS 503 -> throws, no GFS request (the good RRFS cache stays)', async () => {
+        const calls = answer({ ncep_rrfs_conus: 503, gfs_seamless: FIXTURE });
+        const s = new CloudForecastStore(); let saved = 0; s._save = async () => { saved++; };
+        await expect(s.fetchAndStore(FIX_POINTS, { rrfsOnly: true })).rejects.toThrow(/RRFS.*503/);
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+        expect(saved).toBe(0);
+    });
+    it('isCurrent() false when the answer lands: not saved, returns null', async () => {
+        answer({ ncep_rrfs_conus: FIXTURE });
+        const s = new CloudForecastStore(); let saved = 0; s._save = async () => { saved++; };
+        expect(await s.fetchAndStore(FIX_POINTS, { isCurrent: () => false })).toBeNull();
+        expect(saved).toBe(0);
+    });
+    it('the 429 error carries status 429 (so the caller can back off)', async () => {
+        answer({ ncep_rrfs_conus: 429 });
+        const s = new CloudForecastStore(); s._save = async () => {};
+        await expect(s.fetchAndStore(FIX_POINTS)).rejects.toMatchObject({ status: 429 });
+    });
+});

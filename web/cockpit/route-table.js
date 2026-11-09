@@ -2843,18 +2843,34 @@ class RouteTable {
         if (points.length < 2) return;
 
         const hash = cloudRouteHash(points);
-        // Already have this route, fetched within the hour. It used to be once per route per session, so an
-        // unchanged route's forecast was never refreshed while FlyTab ran (review of #213, 2026-11-08).
-        if (hash === this._cloudFetchedHash && Date.now() - (this._cloudFetchedAt || 0) < 3600000) return;
-
         this._cloudStore = this._cloudStore || new CloudForecastStore();
+        // Review of #213 (2026-11-08):
+        // - one request at a time per route (overlapping load/edit calls used to all go out); claimed
+        //   before the first await, so two calls in the same tick cannot both pass;
+        if (this._cloudInFlight === hash) return;
+        // - after a 429 (Open-Meteo's per-IP allowance, shared with the model winds) back off 5 min;
+        if (Date.now() < (this._cloudRetryAfter || 0)) return;
+        this._cloudInFlight = hash;
         try {
-            await this._cloudStore.fetchAndStore(points);
-            this._cloudFetchedHash = hash;
-            this._cloudFetchedAt = Date.now();
-            window.DiagLog?.log('cloud', `forecast cached — ${points.length} pts`);
+            // - freshness from the STORED record, so it survives a restart and matches the WX chip's age
+            //   (a negative age -- the clock moved back -- counts as stale);
+            let rec = null;
+            try { rec = this._cloudStore._data || await this._cloudStore.load(); } catch (_) { rec = null; }
+            const age = rec ? Date.now() - Date.parse(rec.fetchedAt) : NaN;
+            const sameRoute = !!rec && rec.routeHash === hash;
+            if (sameRoute && age >= 0 && age < 3600000) return;
+            // - refreshing a good RRFS forecast for this route asks RRFS only: a hiccup must not swap it for GFS;
+            const rrfsOnly = sameRoute && rec.model === 'RRFS' && age >= 0 && age < 6 * 3600000;
+            // - only the newest request may save (a slower, older route's answer must not overwrite it).
+            const seq = (this._cloudSeq || 0) + 1;
+            this._cloudSeq = seq;
+            const saved = await this._cloudStore.fetchAndStore(points, { rrfsOnly, isCurrent: () => this._cloudSeq === seq });
+            if (saved) window.DiagLog?.log('cloud', `forecast cached — ${points.length} pts (${saved.model})`);
         } catch (e) {
+            if (e?.status === 429) this._cloudRetryAfter = Date.now() + 5 * 60000;
             window.DiagLog?.log('cloud', `forecast fetch failed: ${e?.message}`);
+        } finally {
+            if (this._cloudInFlight === hash) this._cloudInFlight = null;
         }
     }
 
