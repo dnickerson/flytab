@@ -98,6 +98,11 @@ class FuelTankState {
             imbalance: false,
             dropped_burn_estimate_gal: 0,
             dropped_burn_ambiguous: false,
+            // Gallons burned since this init() (tic measurement / fuel stop): the ENG
+            // page USED gauge. State stored before this field existed has no such
+            // field; it is left absent (read as null, shown '—') rather than counted
+            // from 0, which would understate the burn.
+            burned_since_init_gal: 0,
         };
         FuelTankState._loaded = true;
         FuelTankState._save();
@@ -181,6 +186,10 @@ class FuelTankState {
      * @returns {boolean} true if the debit was applied
      */
     static _debitTank(tank, gallons) {
+        if (tank === 'L' || tank === 'R') {
+            const st = FuelTankState._state;
+            if (typeof st.burned_since_init_gal === 'number') st.burned_since_init_gal += gallons;
+        }
         if (tank === 'L') {
             FuelTankState._state.left_gal = Math.max(0, FuelTankState._state.left_gal - gallons);
             return true;

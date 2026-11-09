@@ -5,9 +5,8 @@
  *  1. REMAINING / ENDURANCE / RANGE come from the canonical live fuel read
  *     (FuelState.getCurrentFuel) rather than whatever raw EDM field happens to
  *     be populated on the engine poll payload.
- *  2. USED (FLIGHT) reads the Pi fuel tracker's nested field (`data.fuel.flight_fuel_used`),
- *     which is where engine_monitor.get_status() actually puts it — there is no
- *     top-level `flight_fuel_used`.
+ *  2. USED reads FuelTankState.burned_since_init_gal (gallons since the last tic
+ *     measurement / fuel stop), never the Pi tracker's `data.fuel.flight_fuel_used`.
  *  3. The fuel-bar caution/warning colouring honours the real cockpit-config schema
  *     keys (`enginePage.fuelCautionGal` / `fuelWarningGal`).
  *
@@ -275,17 +274,30 @@ describe('EnginePage FUEL STATUS — capacity comes from aircraft-config, not a 
     });
 });
 
-describe('EnginePage FUEL STATUS — USED (FLIGHT)', () => {
-    it('reads the Pi fuel tracker nested field', () => {
+describe('EnginePage FUEL STATUS — USED', () => {
+    it('USED shows burned_since_init_gal, not data.fuel.flight_fuel_used', () => {
         setup({ tankL: 10, tankR: 8 });
+        FuelTankState._state.burned_since_init_gal = 2.34;
         const out = fuelFields({ fuel: { flight_fuel_used: 4.3 }, fuel_flow: 0 });
-        expect(out.used).toBe('4.3');
+        expect(out.used).toBe('2.3');
+        expect(page._el.querySelector('#ep-fuel-used').closest('.ep-gauge')
+            .querySelector('.ep-gauge-label').textContent).toBe('USED');
     });
 
-    it('falls back to the placeholder when the tracker block is absent', () => {
+    it('reads 0.0 right after a tic measurement (nothing burned yet)', () => {
         setup({ tankL: 10, tankR: 8 });
-        const out = fuelFields({ fuel_flow: 0 });
-        expect(out.used).toBe('--.-');
+        expect(fuelFields({ fuel_flow: 0 }).used).toBe('0.0');
+    });
+
+    it('state stored without the counter shows an em dash, not 0', () => {
+        setup({ tankL: 10, tankR: 8 });
+        delete FuelTankState._state.burned_since_init_gal;
+        expect(fuelFields({ fuel: { flight_fuel_used: 4.3 }, fuel_flow: 0 }).used).toBe('\u2014');
+    });
+
+    it('falls back to the placeholder when nothing is tracked', () => {
+        setup({ tankL: null });
+        expect(fuelFields({ fuel: { flight_fuel_used: 4.3 }, fuel_flow: 0 }).used).toBe('--.-');
     });
 });
 

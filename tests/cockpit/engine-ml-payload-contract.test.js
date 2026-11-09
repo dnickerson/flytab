@@ -80,6 +80,7 @@ beforeEach(() => {
 afterEach(() => {
     delete globalThis.window.Capacitor;
     delete globalThis.DiagLog;
+    delete globalThis.FuelState;
     vi.restoreAllMocks();
 });
 
@@ -143,7 +144,7 @@ describe('EngineMLBridge — payload field-name contract', () => {
     //   oil_temp        <- Oil_Temp      (real; 3rd alias)
     //   oil_press       <- Oil_Press     (real; 3rd alias)
     //   carb_temp       <- Carb_Temp     (real; 2nd alias)
-    //   fuel_remaining  <- Gallons_Rem   (real; 3rd alias)
+    //   fuel_remaining  <- FuelState.getCurrentFuel() (tablet; the Pi tracker is not read)
     // None of these were broken when this test was added — they're asserted
     // here so a future edit to any of these fallback chains (or a Pi-side
     // rename) fails immediately instead of waiting for a flight to surface it.
@@ -162,13 +163,26 @@ describe('EngineMLBridge — payload field-name contract', () => {
         }));
     });
 
-    it('reads oil temp/pressure, carb temp, and fuel remaining from their real fields', async () => {
+    it('reads oil temp/pressure and carb temp from their real fields; fuel remaining from the tablet (FuelState)', async () => {
+        globalThis.FuelState = { getCurrentFuel: () => ({ gallons: 24.9, source: 'tank_state', stale: false }) };
         await bridge._onEngineData(ENGINE_FRAME);
         expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({
             oil_temp: 180.0,       // Oil_Temp
             oil_press: 76.0,       // Oil_Press
             carb_temp: 45.0,       // Carb_Temp
-            fuel_remaining: 24.9,  // Gallons_Rem
+            fuel_remaining: 24.9,  // FuelState.getCurrentFuel() (tablet), not Gallons_Rem
         }));
+    });
+
+    it('sends 0 fuel_remaining when only the capacity default is known (not a measurement)', async () => {
+        globalThis.FuelState = { getCurrentFuel: () => ({ gallons: 36, source: 'capacity', stale: false }) };
+        await bridge._onEngineData({ ...ENGINE_FRAME, fuel: { fuel_remaining: 30 } });
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 0 }));
+    });
+
+    it('ignores the Pi tracker data.fuel.fuel_remaining', async () => {
+        globalThis.FuelState = { getCurrentFuel: () => ({ gallons: 11, source: 'manual', stale: false }) };
+        await bridge._onEngineData({ ...ENGINE_FRAME, fuel: { fuel_remaining: 30 } });
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 11 }));
     });
 });

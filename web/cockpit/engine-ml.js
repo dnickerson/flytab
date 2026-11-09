@@ -192,6 +192,16 @@ class EngineMLBridge {
 
     // ========== Anomaly Simulation ==========
 
+    /** Gallons from the tablet's fuel read (tracked or manual), or null when only the
+     *  capacity default is known. The Pi tracker figure is never used. */
+    _tabletFuelGal() {
+        try {
+            const f = (typeof FuelState !== 'undefined') ? FuelState.getCurrentFuel() : null;
+            if (f && f.source !== 'capacity' && Number.isFinite(f.gallons)) return f.gallons;
+        } catch (_) { /* fall through */ }
+        return null;
+    }
+
     /**
      * Inject a fake engine frame with MAP -6" Hg and RPM -350 to trigger
      * the full anomaly detection pipeline (physics rules + ML confirmation).
@@ -241,7 +251,7 @@ class EngineMLBridge {
                     altitude:       num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft, 3000),
                     mp:             fakeFrame.manifold_pressure,
                     carb_temp:      num(d.carb_temp ?? d.Carb_Temp, 40),
-                    fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem, 20),
+                    fuel_remaining: num(this._tabletFuelGal() ?? 0, 20),
                     ground_speed:   num(sit?.ground_speed, 100),
                     distance_nm:    0,
                     phase:          (this._lastComputedPhase && this._lastComputedPhase !== 'shutdown') ? this._lastComputedPhase : (this._flightPhase ?? 'cruise'),
@@ -387,7 +397,7 @@ class EngineMLBridge {
                 altitude: num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft ?? 0),
                 mp: num(d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
                 carb_temp: num(d.carb_temp ?? d.Carb_Temp ?? 0),
-                fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem ?? 0),
+                fuel_remaining: num(this._tabletFuelGal() ?? 0),
                 ground_speed: num(sit?.ground_speed ?? d.ground_speed ?? d.speed_kts ?? 0),
                 distance_nm: 0, // TODO: compute from route
                 phase,

@@ -168,7 +168,7 @@ class EnginePage {
             <div class="ep-section-title">FUEL STATUS</div>
             <div class="ep-section ep-fuel-row">
                 ${this._gaugeHtml('ep-fuel-rem',  'REMAINING',   '--.-', 'GAL')}
-                ${this._gaugeHtml('ep-fuel-used', 'USED (FLIGHT)','--.-','GAL')}
+                ${this._gaugeHtml('ep-fuel-used', 'USED','--.-','GAL')}
                 ${this._gaugeHtml('ep-fuel-end',  'ENDURANCE',   '-:--', 'H:MM')}
                 ${this._gaugeHtml('ep-fuel-rng',  'RANGE',       '---',  'NM')}
             </div>
@@ -541,9 +541,12 @@ class EnginePage {
         // surface disagreement between the tic-mark measurement and the D-180 — it must
         // stay a D-180 read.
         const edmFuelRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
-        // engine_monitor.get_status() nests the Pi fuel tracker under `fuel`;
-        // there is no top-level flight_fuel_used.
-        const fuelUsed   = d.fuel?.flight_fuel_used ?? 0;
+        // USED = gallons burned since the last tic measurement / fuel stop, from the
+        // tablet's FuelTankState (not the Pi tracker). Three states: nothing tracked
+        // ('--.-'), tracked state saved before the counter existed ('\u2014' - unknown,
+        // not 0), or a real count.
+        const tankState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+        const fuelUsed = tankState ? tankState.burned_since_init_gal : undefined;
         const fuelL      = d.fuel_l1 ?? d.Fuel_L1 ?? d.Fuel_Left ?? d.edm_fuel_left ?? 0;
         const fuelR      = d.fuel_l2 ?? d.Fuel_L2 ?? d.Fuel_Right ?? d.edm_fuel_right ?? 0;
 
@@ -630,7 +633,8 @@ class EnginePage {
 
         /* ---- Section 5: Fuel ---- */
         this._setText('ep-fuel-rem', fuelTracked ? gallonsRem.toFixed(1) : '--.-');
-        this._setText('ep-fuel-used', fuelUsed > 0 ? fuelUsed.toFixed(1) : '--.-');
+        this._setText('ep-fuel-used', !tankState ? '--.-'
+            : (typeof fuelUsed === 'number' ? fuelUsed.toFixed(1) : '\u2014'));
         if (this._dom.fuelRem) {
             this._dom.fuelRem.className = 'ep-gauge-value' + (fuelStale ? ' ep-unconfirmed' : '');
         }

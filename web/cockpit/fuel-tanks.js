@@ -99,11 +99,14 @@ class FuelTanksDisplay {
         if (!data) return;
         const d = data.data ? { ...data, ...data.data } : data;
         const gph = d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0;
-        this._lastGph = gph;
         // Burn only from a CURRENT EDM row. The Pi keeps resending its last row after
         // the EDM goes quiet, so a frozen frame must not keep integrating burn.
         // Same rule engine-ml.js uses. A gap is handled by onSample's dt logic on resume.
         const edmCurrent = typeof EngineClient === 'undefined' || EngineClient.edmCurrent(d);
+        // A frozen frame's GPH is not live: treat flow as unknown (0) so the readout
+        // and endurance take the existing "no flow" rendering ('--') instead of
+        // presenting the last reading as current.
+        this._lastGph = edmCurrent ? gph : 0;
         if (gph > 0 && edmCurrent) {
             FuelTankState.onSample(gph, Date.now());
         }
@@ -520,8 +523,11 @@ class FuelTanksDisplay {
         // aircraft's sender hardware) once tracked tank level drops to the configured
         // threshold; above it the sender reads an invalid/flat value and must not be
         // shown as if it were a real cross-check.
-        const senderL = data.fuel?.edm_fuel_left ?? null;
-        const senderR = data.fuel?.edm_fuel_right ?? null;
+        // The D-180 EMS's own per-tank fields (Fuel_Left / Fuel_Right), as forwarded by
+        // the Pi. Not the Pi tracker's data.fuel.*.
+        const emsNum = (v) => (v != null && v !== '' && Number.isFinite(Number(v))) ? Number(v) : null;
+        const senderL = emsNum(data.Fuel_Left);
+        const senderR = emsNum(data.Fuel_Right);
         const trackedState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
         const threshold = this._senderAccurateBelowGal ?? 12;
 

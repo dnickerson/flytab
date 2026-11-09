@@ -76,3 +76,31 @@ describe('FuelTanksDisplay burn gate (only current EMS data burns fuel)', () => 
         expect(updateSender).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('FuelTanksDisplay flow readout and endurance on a frozen frame', () => {
+    it('shows live flow and endurance from a current frame', () => {
+        const w = makeWidget();
+        FuelTankState.init(9, 9, 'L');
+        w._handleEngineData({ Fuel_Flow: 9 });
+        expect(w._dom.flow.textContent).toBe('9.0');
+        expect(w._dom.end.textContent).toMatch(/^\d+:\d\d/);
+    });
+
+    it('does not present the frozen GPH as live: flow and endurance read "--"', () => {
+        const w = makeWidget();
+        FuelTankState.init(9, 9, 'L');
+        w._handleEngineData({ Fuel_Flow: 9 });
+        w._handleEngineData({ Fuel_Flow: 9, serial_warning: 'no EDM data 30 s' });
+        expect(w._dom.flow.textContent).toBe('--');
+        expect(w._dom.end.textContent).toBe('--');
+        expect(w._dom.end.classList.contains('ftw-unconfirmed')).toBe(false);
+    });
+
+    it('recovers when a current frame arrives again', () => {
+        const w = makeWidget();
+        FuelTankState.init(9, 9, 'L');
+        w._handleEngineData({ Fuel_Flow: 9, serial_connected: false });
+        w._handleEngineData({ Fuel_Flow: 8 });
+        expect(w._dom.flow.textContent).toBe('8.0');
+    });
+});
