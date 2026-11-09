@@ -90,3 +90,25 @@ describe('FuelOverlay active fuel source', () => {
         } finally { Settings.fuelManualOverride = null; }
     });
 });
+
+describe('EDM freshness window (used by the fuel overlay comparison)', () => {
+    it('EDM_FRESHNESS_MS is a positive number', () => {
+        expect(FuelState.EDM_FRESHNESS_MS).toBeGreaterThan(0);
+    });
+
+    it('_resolveEdmFuel returns a fresh live panel value without any fetch', async () => {
+        let fetched = 0;
+        globalThis.fetch = () => { fetched++; return Promise.reject(new Error('no fetch expected')); };
+        window.enginePanel = { lastData: { fuel: { fuel_remaining: 16.9 } }, lastPollTime: Date.now() };
+        expect(FuelEngine.extractEdmFuel(window.enginePanel.lastData)).toBeCloseTo(16.9, 5);
+        expect(await overlay._resolveEdmFuel()).toBeCloseTo(16.9, 5);
+        expect(fetched).toBe(0);
+    });
+
+    it('a stale panel reading is not used as live', async () => {
+        globalThis.fetch = () => Promise.reject(new Error('offline'));
+        window.enginePanel = { lastData: { fuel: { fuel_remaining: 16.9 } },
+            lastPollTime: Date.now() - FuelState.EDM_FRESHNESS_MS - 1000 };
+        expect(await overlay._resolveEdmFuel()).toBeNull();
+    });
+});

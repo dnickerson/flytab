@@ -9,6 +9,9 @@
  */
 
 class FuelState {
+    /** Engine-data freshness window (ms); fuel-overlay.js uses it for engine-data freshness. */
+    static EDM_FRESHNESS_MS = 10000;
+
     /**
      * Save a tic mark measurement to localStorage.
      * @param {object} m - Measurement from FuelEngine.createMeasurement()
