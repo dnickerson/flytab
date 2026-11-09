@@ -188,7 +188,7 @@ class WbOverlay {
      * `FuelState.getCurrentFuel()` returns `{gallons, source, stale}` and its
      * `capacity` source means nothing is tracked at all — it is a planning default
      * worth a full 36 gal / 216 lb of fuel that may not be in the aircraft. This
-     * used to read `FuelState.getStartFuel()`, which never consults FuelTankState:
+     * used to read `FuelState.getStartFuel()` (since removed), which never consults FuelTankState:
      * measured on this branch, dry tracked tanks (0.0 gal) and a normally tracked
      * 18.0 gal BOTH pre-filled 36.0, and a tracked 10.0 gal with the EDM totalizer
      * reading 30 pre-filled 30.0. Same canonical read as engine-page.js,

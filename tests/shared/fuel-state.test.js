@@ -106,3 +106,22 @@ describe('FuelState capacity fallback', () => {
         expect(FuelState.getCurrentFuel().gallons).toBe(36);
     });
 });
+
+describe('FuelState — single fuel source chain', () => {
+    it('getStartFuel no longer exists', () => {
+        const FuelState = freshFuelState();
+        expect(FuelState.getStartFuel).toBeUndefined();
+    });
+
+    it('a Pi fuel figure never becomes the fuel on board', () => {
+        const FuelState = freshFuelState({ tankState: { left_gal: 15.6, right_gal: 18.0 } });
+        global.window.enginePanel = { lastData: { fuel: { fuel_remaining: 16.9 } }, lastPollTime: Date.now() };
+        try {
+            const cur = FuelState.getCurrentFuel();
+            expect(cur.gallons).toBeCloseTo(33.6, 5);
+            expect(cur.source).toBe('tank_state');
+        } finally {
+            delete global.window.enginePanel;
+        }
+    });
+});

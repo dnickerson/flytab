@@ -336,7 +336,7 @@ class InstrumentStrip {
      * old raw-EDM-first chain, which took `fuel_remaining_gal`/`Gallons_Rem`/
      * `Fuel_Remaining` straight off the engine poll payload and so showed the EDM
      * totalizer (measured: 30.0) over a tracked 10.0 gal, and fell through to
-     * `FuelState.getStartFuel()` — full tank capacity — when nothing was tracked.
+     * the old start-fuel chain (since removed) — full tank capacity — when nothing was tracked.
      *
      * The SOURCE, not the number, decides whether this field has data:
      *  - `capacity` means nothing is being tracked. That is a planning default, not

@@ -160,9 +160,7 @@ class FuelOverlay {
             <div class="fo-source-chain" id="fo-source-chain">
                 <span class="fo-source-chip" data-src="manual">MANUAL</span>
                 <span class="fo-source-sep">\u203A</span>
-                <span class="fo-source-chip" data-src="edm">EDM</span>
-                <span class="fo-source-sep">\u203A</span>
-                <span class="fo-source-chip" data-src="tic">TIC</span>
+                <span class="fo-source-chip" data-src="tank_state">TRACKED</span>
                 <span class="fo-source-sep">\u203A</span>
                 <span class="fo-source-chip" data-src="capacity">CAPACITY</span>
             </div>
@@ -632,9 +630,10 @@ class FuelOverlay {
     }
 
     _updateSourceDisplay() {
-        const { gallons, source } = FuelState.getStartFuel();
+        const { gallons, source, stale } = FuelState.getCurrentFuel();
+        const label = source === 'tank_state' ? 'TRACKED' : source.toUpperCase();
         this._dom.sourceDisplay.textContent =
-            `${gallons.toFixed(1)} gal (${source.toUpperCase()})`;
+            `${gallons.toFixed(1)} gal (${label})` + (stale ? ' \u00B7 UNCONFIRMED' : '');
 
         // Highlight active chip in priority chain
         const chips = this._dom.sourceChain.querySelectorAll('.fo-source-chip');
