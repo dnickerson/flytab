@@ -536,9 +536,10 @@ class EnginePage {
         // whether a figure is trustworthy; it is already false for `manual` (the
         // pilot's own entry) and `capacity` (nothing tracked).
         const fuelStale = !!fuelRead.stale;
-        // The EDM's own totalizer (EDM field 12). Used ONLY by the TIC vs EDM
-        // cross-check row below, whose whole purpose is to surface disagreement
-        // between the tic-mark measurement and the EDM — it must stay an EDM read.
+        // The Dynon D-180's own fuel computer (EMS serial field 12, Fuel_Remaining).
+        // Used ONLY by the TIC vs D-180 cross-check row below, whose whole purpose is to
+        // surface disagreement between the tic-mark measurement and the D-180 — it must
+        // stay a D-180 read.
         const edmFuelRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
         // engine_monitor.get_status() nests the Pi fuel tracker under `fuel`;
         // there is no top-level flight_fuel_used.

@@ -161,7 +161,7 @@ describe('measurement record', () => {
         expect(h[0].edm_gal).toBeNull();
     });
 
-    it('RECORD FUEL STOP saves tracked_gal and edm_gal on the measurement, no history entry', () => {
+    it('RECORD FUEL STOP saves tracked_gal, edm_gal and a history entry with fuel_stop_gal', () => {
         FuelTankState.init(5, 6, 'L');
         window.enginePanel = freshPanel({ Fuel_Remaining: 10.2 });
         const d = open();
@@ -173,7 +173,28 @@ describe('measurement record', () => {
         expect(d.addStatus.className).toContain('fo-add-status-ok');
         expect(Settings.fuelMeasurement.tracked_gal).toBe(11);
         expect(Settings.fuelMeasurement.edm_gal).toBe(10.2);
-        expect(history()).toHaveLength(0);
+        const h = history();
+        expect(h).toHaveLength(1);
+        expect(h[0]).toMatchObject({ total_gal: 33.6, tracked_gal: 11, edm_gal: 10.2, fuel_stop_gal: 22 });
+        // Variance is graded against tracked; edm_gal is the D-180 figure, not the reference.
+        expect(h[0].variance_gal).toBe(22.6);
+        // The history list marks it as a fuel stop.
+        const row = overlay._dom.histBody.querySelector('tr');
+        expect(row.classList.contains('fo-hist-row-stop')).toBe(true);
+        expect(row.querySelector('.fo-hist-stop').textContent).toBe('FUEL STOP +22.0 gal');
+    });
+
+    it('a new record with tracked_gal: null shows -- as TRACKED and is not counted (no edm_gal fallback)', () => {
+        localStorage.setItem('flypi_fuel_history', JSON.stringify([
+            { measured_at: iso(0),  total_gal: 30.0, tracked_gal: 28.0, edm_gal: null },
+            { measured_at: iso(60), total_gal: 25.0, tracked_gal: null, edm_gal: 12.5 },
+        ]));
+        open();
+        const rows = [...overlay._dom.histBody.querySelectorAll('tr')]
+            .map(tr => [...tr.querySelectorAll('td')].slice(1, 3).map(td => td.textContent));
+        expect(rows).toEqual([['25.0', '--'], ['30.0', '28.0']]);
+        expect($('fo-kf-used').textContent).toBe('-- gal');
+        expect($('fo-kf-ratio').textContent).toBe('--');
     });
 
     it('APPLY TIC with no fresh engine panel completes at once with zero fetches', () => {
@@ -191,54 +212,114 @@ describe('measurement record', () => {
     });
 });
 
-describe('K-factor from tracked burn', () => {
+describe('K-factor: actual used (tic + fuel stops) vs tracked used', () => {
     const setData = (hist, stops) => {
         localStorage.setItem('flypi_fuel_history', JSON.stringify(hist));
         localStorage.setItem('flytab_fuel_stops', JSON.stringify(stops));
     };
 
-    it('K-factor ratio from tracked burn between fills', () => {
-        setData([
-            // Deliberately out of order: sorting by time is part of the contract.
-            { measured_at: iso(60),  total_gal: 20.0, tracked_gal: 15.0 },  // 33.6 − 15.0 = 18.6
-            { measured_at: iso(0),   total_gal: 33.6, tracked_gal: 30.0 },
-            // A fuel stop at +90 re-inits the tracker without a history entry: the
-            // pair (+60, +120) mixes pre- and post-fill figures and must not count,
-            // even though tic did not rise and the drop (20.0 − 14.0) is positive.
-            { measured_at: iso(120), total_gal: 19.0, tracked_gal: 14.0 },
-            { measured_at: iso(180), total_gal: 15.0, tracked_gal: 13.0 },  // 19.0 − 13.0 = 6.0
-        ], [
-            { airport: 'KMYL', gallons: 12.3, saved_at: iso(90) },
-            { airport: 'KBOI', gallons: 12.3, saved_at: iso(200) },
-        ]);
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('APPLY → RECORD FUEL STOP → APPLY through the overlay counts both legs', () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        const T0 = Date.UTC(2026, 10, 1, 15, 0);
+
+        vi.setSystemTime(T0);
+        FuelTankState.init(18, 18, 'L');                 // tracked 36.0
+        let d = open();
+        drag(d.leftSlider, 8); drag(d.rightSlider, 11);  // tic 33.6
+        tap('fo-apply');
+
+        vi.setSystemTime(T0 + 60 * 60000);
+        FuelTankState.init(5, 5, 'L');                   // tracked burned down to 10.0
+        d = open();
+        drag(d.leftSlider, 11); drag(d.rightSlider, 11); // tic 36.0 after the fill
+        d.addGal.value = '25';
+        tap('fo-add-record');
+        // leg 1: actual 33.6 − (36.0 − 25) = 22.6; tracked 33.6 − 10.0 = 23.6
+
+        vi.setSystemTime(T0 + 120 * 60000);
+        FuelTankState.init(9, 9, 'L');                   // tracked 18.0
+        d = open();
+        drag(d.leftSlider, 6); drag(d.rightSlider, 6);   // tic 26.0
+        tap('fo-apply');
+        // leg 2: actual 36.0 − 26.0 = 10.0; tracked 36.0 − 18.0 = 18.0
+
+        expect(history()).toHaveLength(3);
+        expect(history()[1].fuel_stop_gal).toBe(25);
         open();
-        expect($('fo-kf-filled').textContent).toBe('24.6 gal');
-        expect($('fo-kf-used').textContent).toBe('24.6 gal');
-        expect($('fo-kf-ratio').textContent).toBe('1.000');
+        expect($('fo-kf-filled').textContent).toBe('32.6 gal');
+        expect($('fo-kf-used').textContent).toBe('41.6 gal');
+        expect($('fo-kf-ratio').textContent).toBe('1.276');   // 41.6 / 32.6
+        expect($('fo-kf-guidance').textContent).toMatch(/× 1\.276\s+\(increase K-factor — tracked burn higher than actual\)/);
+    });
+
+    it('a legacy stop (no history entry) excludes only the pair it falls in', () => {
+        const hist = [
+            // Deliberately out of order: sorting by time is part of the contract.
+            { measured_at: iso(60),  total_gal: 34.0, tracked_gal: 20.0, fuel_stop_gal: 15.0 },
+            { measured_at: iso(0),   total_gal: 33.6, tracked_gal: 30.0 },
+            { measured_at: iso(120), total_gal: 25.0, tracked_gal: 24.0 },
+            { measured_at: iso(180), total_gal: 22.0, tracked_gal: 21.0 },
+            { measured_at: iso(240), total_gal: 18.0, tracked_gal: 17.5 },
+        ];
+        // (0→60)    stop entry: actual 33.6 − (34 − 15) = 14.6, tracked 33.6 − 20 = 13.6
+        // (60→120)  plain:      actual 34 − 25 = 9.0,          tracked 34 − 24 = 10.0
+        // (120→180) plain:      actual 3.0, tracked 4.0 — but a legacy stop at +150
+        // (180→240) plain:      actual 4.0, tracked 4.5
+        const matched = { airport: 'KMYL', gallons: 15.0, saved_at: new Date(Date.parse(iso(60)) + 2).toISOString() };
+        const legacy  = { airport: 'KBOI', gallons: 10.0, saved_at: iso(150) };
+
+        setData(hist, [matched, legacy]);
+        open();
+        expect($('fo-kf-filled').textContent).toBe('27.6 gal');
+        expect($('fo-kf-used').textContent).toBe('28.1 gal');
+        expect($('fo-kf-ratio').textContent).toBe('1.018');
+        overlay.hide();
+
+        setData(hist, [matched]);                        // no legacy stop: (120→180) counts
+        open();
+        expect($('fo-kf-filled').textContent).toBe('30.6 gal');
+        expect($('fo-kf-used').textContent).toBe('32.1 gal');
+        expect($('fo-kf-ratio').textContent).toBe('1.049');
+    });
+
+    it('tracked burn lower than actual says decrease the K-factor', () => {
+        setData([
+            { measured_at: iso(0),  total_gal: 30.0, tracked_gal: 30.0 },
+            { measured_at: iso(60), total_gal: 20.0, tracked_gal: 21.0 },  // actual 10, tracked 9
+        ], []);
+        open();
+        expect($('fo-kf-ratio').textContent).toBe('0.900');
+        expect($('fo-kf-guidance').textContent).toMatch(/decrease K-factor — tracked burn lower than actual/);
     });
 
     it('old history entries with only edm_gal still render a number', () => {
         setData([
             { measured_at: iso(0),  total_gal: 33.6, edm_gal: 31.0 },
-            { measured_at: iso(60), total_gal: 25.0, edm_gal: 22.0 },        // 33.6 − 22.0 = 11.6
+            { measured_at: iso(60), total_gal: 25.0, edm_gal: 22.0 },        // actual 8.6, tracked 11.6
             { measured_at: iso(90), total_gal: 24.0 },                        // neither figure
             { measured_at: iso(95), total_gal: 23.5, tracked_gal: 'x' },      // junk
         ], [{ airport: 'KMYL', gallons: 11.6, saved_at: iso(200) }]);
         open();
+        expect($('fo-kf-filled').textContent).toBe('8.6 gal');
         expect($('fo-kf-used').textContent).toBe('11.6 gal');
-        expect($('fo-kf-ratio').textContent).toBe('1.000');
+        expect($('fo-kf-ratio').textContent).toBe('1.349');
         expect(overlay._el.querySelector('#fo-kfactor-panel').textContent).not.toMatch(/NaN/);
     });
 
-    it('a tic that rose (refuel) does not count, and guidance speaks of tracked fuel flow', () => {
+    it('a tic that rose with no stop entry does not count; labels speak of tracked fuel flow', () => {
         setData([
             { measured_at: iso(0),  total_gal: 20.0, tracked_gal: 22.0 },
-            { measured_at: iso(60), total_gal: 30.0, tracked_gal: 12.0 },    // tic rose: skipped
-        ], [{ airport: 'KMYL', gallons: 10, saved_at: iso(200) }]);
+            { measured_at: iso(60), total_gal: 30.0, tracked_gal: 12.0 },    // actual −10: skipped
+        ], []);
         open();
         expect($('fo-kf-used').textContent).toBe('-- gal');
-        expect(overlay._el.querySelector('#fo-kfactor-panel').textContent).not.toMatch(/EDM/);
-        expect(overlay._el.querySelector('#fo-kfactor-panel').textContent).toMatch(/TRACKED/);
+        const txt = overlay._el.querySelector('#fo-kfactor-panel').textContent;
+        expect(txt).not.toMatch(/EDM/);
+        expect(txt).toMatch(/ACTUAL USED \(tic \+ fuel stops\)/);
+        expect(txt).toMatch(/TRACKED USED \(fuel flow\)/);
+        expect(txt).toMatch(/pulses per gallon/);
     });
 });
 

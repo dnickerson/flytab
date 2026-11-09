@@ -6128,6 +6128,12 @@ body.fs-overlay-open .radar-loop-controls {
     border-radius: 4px;
     text-align: center;
 }
+.fo-hist-stop {
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--text-secondary);
+}
 .fo-edm-d180 {
     margin-top: 4px;
     text-align: center;

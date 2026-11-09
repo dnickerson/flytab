@@ -201,11 +201,11 @@ class FuelOverlay {
             <div class="fo-kfactor-panel" id="fo-kfactor-panel">
                 <div class="fo-kfactor-row">
                     <div class="fo-kfactor-item">
-                        <div class="fo-kfactor-label">FUEL FILLED (actual)</div>
+                        <div class="fo-kfactor-label">ACTUAL USED (tic + fuel stops)</div>
                         <div class="fo-kfactor-val" id="fo-kf-filled">-- gal</div>
                     </div>
                     <div class="fo-kfactor-item">
-                        <div class="fo-kfactor-label">FUEL USED (TRACKED)</div>
+                        <div class="fo-kfactor-label">TRACKED USED (fuel flow)</div>
                         <div class="fo-kfactor-val" id="fo-kf-used">-- gal</div>
                     </div>
                     <div class="fo-kfactor-item">
@@ -215,8 +215,9 @@ class FuelOverlay {
                 </div>
                 <div class="fo-kfactor-guidance" id="fo-kf-guidance"></div>
                 <div class="fo-kfactor-note">
-                    Ratio = Filled ÷ Used (TRACKED). Tracked burn is integrated from the D-180 fuel-flow
-                    reading, so multiply the D-180's current K-factor by this ratio to correct its fuel flow.
+                    Ratio = Tracked used ÷ Actual used, over the legs between tic measurements. Tracked burn
+                    is integrated from the D-180 fuel-flow reading; the D-180 K-factor is pulses per gallon,
+                    so New K-factor = Current K-factor × Ratio (tracked higher than actual → increase it).
                 </div>
             </div>
         </div>`;
@@ -647,9 +648,16 @@ class FuelOverlay {
      */
     _createRecordedMeasurement() {
         const tracked = this._trackedTotal();
-        const m = FuelEngine.createMeasurement(
-            this._leftTic, this._rightTic, this._coefficients, tracked ? tracked.gal : null
-        );
+        const m = FuelEngine.createMeasurement(this._leftTic, this._rightTic, this._coefficients);
+        if (tracked) {
+            // createMeasurement() grades against its 4th argument but also stores that
+            // argument as edm_gal; take only the grading from it.
+            const graded = FuelEngine.createMeasurement(
+                this._leftTic, this._rightTic, this._coefficients, tracked.gal);
+            for (const k of ['variance_gal', 'variance_pct', 'accuracy']) {
+                if (graded[k] !== undefined) m[k] = graded[k];
+            }
+        }
         m.tracked_gal = tracked ? tracked.gal : null;
         m.edm_gal = this._resolveD180Fuel();
         return m;
@@ -733,8 +741,9 @@ class FuelOverlay {
             // exactly like _applyMeasurement() does — a fuel stop is always grounded in
             // a fresh physical measurement, never computed from "previous + added."
             // The measurement record (tracked_gal, edm_gal) is taken before init()
-            // re-initialises the tracked state. No flypi_fuel_history entry is written
-            // here; the K-factor skips history pairs that span a fuel stop.
+            // re-initialises the tracked state. It also goes into flypi_fuel_history with
+            // the pumped gallons (fuel_stop_gal), so the K-factor can count the leg that
+            // ends at this stop: actual used = previous tic − (this tic − gallons pumped).
             const m = this._createRecordedMeasurement();
             const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
             const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
@@ -743,10 +752,13 @@ class FuelOverlay {
                 FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L');
             }
             FuelState.saveMeasurement(m);
+            this._syncMeasurement({ ...m, fuel_stop_gal: gallons });
             const newTotal = m.total_gal;
 
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
+            this._renderHistory();
+            this._renderKFactor();
 
             // The reading has been consumed. A second RECORD tap must be backed by its own
             // fresh measurement, not this one — otherwise a double tap (or a second stop
@@ -867,10 +879,15 @@ class FuelOverlay {
             const ref = this._historyRefField(m);
             const trk = Number.isFinite(m[ref]) ? m[ref].toFixed(1) : '--';
 
+            const stopGal = Number(m.fuel_stop_gal);
+            const stopTag = (Number.isFinite(stopGal) && stopGal > 0)
+                ? `<div class="fo-hist-stop">FUEL STOP +${stopGal.toFixed(1)} gal</div>` : '';
+
             const tr = document.createElement('tr');
             tr.dataset.origIdx = origIdx;
+            if (stopTag) tr.classList.add('fo-hist-row-stop');
             tr.innerHTML = `
-                <td>${dateStr}</td>
+                <td>${dateStr}${stopTag}</td>
                 <td>${tic}</td>
                 <td>${trk}</td>
                 <td class="fo-hist-actions">
@@ -936,11 +953,13 @@ class FuelOverlay {
         });
     }
 
-    /** The comparison figure a history entry carries: tracked_gal on entries saved
-     *  since the tablet became the fuel source, edm_gal on older ones (the engine-data
-     *  fuel figure at the time), which have no tracked_gal. */
+    /** The comparison figure a history entry carries. Entries saved since the tablet
+     *  became the fuel source always have a tracked_gal key (null when nothing was
+     *  tracked); older entries have no such key and carry edm_gal (the engine-data
+     *  fuel figure at the time). Told apart by key presence, so a new entry with
+     *  tracked_gal: null never falls back to its D-180 edm_gal. */
     _historyRefField(m) {
-        return (m && m.tracked_gal != null) ? 'tracked_gal' : 'edm_gal';
+        return (m && typeof m === 'object' && 'tracked_gal' in m) ? 'tracked_gal' : 'edm_gal';
     }
 
     _fmtDate(dt) {
@@ -953,69 +972,79 @@ class FuelOverlay {
         return `${mo}/${day} ${hr12}:${mn}${ampm}`;
     }
 
+    /**
+     * K-factor check from consecutive history entries (prev, next), sorted by time:
+     *   actual used  = prev.total_gal − (next.total_gal − next.fuel_stop_gal)
+     *   tracked used = prev.total_gal − next's tracked figure (taken before next's tic)
+     * fuel_stop_gal is 0 for an APPLY TIC entry. A pair counts only when both are
+     * finite and positive and no LEGACY fuel stop (a flytab_fuel_stops record with no
+     * matching history entry, i.e. recorded before stops were written to history)
+     * lies between the two: its fill is unknown to the pair.
+     * Ratio = Σtracked ÷ Σactual. The D-180 K-factor is pulses per gallon (FlightDEK-
+     * D180 Installation Guide, EMS Configuration → Fuel Flow: "if your GALS USED
+     * reads higher than you expect, increase the K-factor"), so
+     * New K = Current K × Ratio.
+     */
+    _computeKFactor() {
+        const toMs = (v) => {
+            if (v == null || v === '') return null;
+            const t = new Date(v).getTime();
+            return Number.isFinite(t) ? t : null;
+        };
+        let history = [];
+        try { history = JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]'); } catch (_) { /* */ }
+        if (!Array.isArray(history)) history = [];
+        let stops = [];
+        try { stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]'); } catch (_) { /* */ }
+        if (!Array.isArray(stops)) stops = [];
+
+        const entries = history.filter(m => m && typeof m === 'object').map(m => {
+            const stopGal = Number(m.fuel_stop_gal);
+            return {
+                ts: toMs(m.measured_at) ?? (Number.isFinite(m.ts) ? m.ts : 0),
+                tic: m.total_gal,
+                ref: m[this._historyRefField(m)],
+                stopGal: Number.isFinite(stopGal) && stopGal > 0 ? stopGal : 0,
+                isStop: m.fuel_stop_gal != null,
+            };
+        }).sort((a, b) => a.ts - b.ts);
+
+        // A stop recorded with this version wrote a history entry in the same call
+        // (timestamps milliseconds apart). Allow a few seconds for that match.
+        const MATCH_MS = 5000;
+        const stopEntryTimes = entries.filter(e => e.isStop).map(e => e.ts);
+        const legacyStopTimes = [];
+        for (const st of stops) {
+            const t = toMs(st?.saved_at) ?? (st?.date ? toMs(`${st.date}T${st.time || '00:00'}`) : null);
+            if (t == null) continue;
+            if (!stopEntryTimes.some(e => Math.abs(e - t) <= MATCH_MS)) legacyStopTimes.push(t);
+        }
+
+        let actual = 0, tracked = 0, pairs = 0;
+        for (let i = 1; i < entries.length; i++) {
+            const prev = entries[i - 1];
+            const next = entries[i];
+            if (!Number.isFinite(prev.tic) || !Number.isFinite(next.tic) || !Number.isFinite(next.ref)) continue;
+            const a = prev.tic - (next.tic - next.stopGal);
+            const t = prev.tic - next.ref;
+            if (!(a > 0) || !(t > 0)) continue;
+            if (legacyStopTimes.some(st => st > prev.ts && st < next.ts)) continue;
+            actual += a;
+            tracked += t;
+            pairs++;
+        }
+        return { actual, tracked, pairs };
+    }
+
     _renderKFactor() {
         if (!this._dom.kfFilled) return;
+        const { actual, tracked, pairs } = this._computeKFactor();
 
-        // Total fuel filled from recorded fuel stops
-        let totalFilled = 0;
-        try {
-            const stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]');
-            totalFilled = stops.reduce((sum, s) => sum + (parseFloat(s.gallons) || 0), 0);
-        } catch (_) { /* */ }
+        this._dom.kfFilled.textContent = pairs > 0 ? actual.toFixed(1) + ' gal' : '-- gal';
+        this._dom.kfUsed.textContent = pairs > 0 ? tracked.toFixed(1) + ' gal' : '-- gal';
 
-        // Total tracked fuel used: over consecutive measurements (prev, next), the tic
-        // at prev minus the tracked figure just before next's tic was applied. Old
-        // entries carry only edm_gal (the engine-data fuel figure then) and fall back to it.
-        let totalUsed = 0;
-        try {
-            const toMs = (v) => { const t = new Date(v).getTime(); return Number.isFinite(t) ? t : null; };
-            const stopTimes = [];
-            try {
-                const stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]');
-                for (const st of stops) {
-                    const t = toMs(st?.saved_at) ?? (st?.date ? toMs(`${st.date}T${st.time || '00:00'}`) : null);
-                    if (t != null) stopTimes.push(t);
-                }
-            } catch (_) { /* no stops */ }
-
-            const history = JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]');
-            const entries = history.map(m => ({
-                ts: (m.measured_at ? toMs(m.measured_at) : null) ?? (Number.isFinite(m.ts) ? m.ts : 0),
-                tic: m.total_gal,
-                ref: m.tracked_gal ?? m.edm_gal,
-            })).sort((a, b) => a.ts - b.ts);
-
-            for (let i = 1; i < entries.length; i++) {
-                const prev = entries[i - 1];
-                const next = entries[i];
-                if (!Number.isFinite(prev.tic) || !Number.isFinite(next.tic) || !Number.isFinite(next.ref)) continue;
-                const used = prev.tic - next.ref;
-                // Require a positive drop and a tic that didn't increase — a tic that
-                // rose means fuel was added between the two. ticDrop === 0 is kept:
-                // the tic scale is quantized to 0.5 gal steps and can legitimately read
-                // flat between two close measurements.
-                if (!(used > 0) || next.tic > prev.tic) continue;
-                // A fuel stop re-initialises the tracker without writing history, so a
-                // pair spanning one mixes pre- and post-fill figures.
-                if (stopTimes.some(t => t > prev.ts && t < next.ts)) continue;
-                totalUsed += used;
-            }
-        } catch (_) { /* */ }
-
-        if (totalFilled > 0) {
-            this._dom.kfFilled.textContent = totalFilled.toFixed(1) + ' gal';
-        } else {
-            this._dom.kfFilled.textContent = '-- gal';
-        }
-
-        if (totalUsed > 0) {
-            this._dom.kfUsed.textContent = totalUsed.toFixed(1) + ' gal';
-        } else {
-            this._dom.kfUsed.textContent = '-- gal';
-        }
-
-        if (totalFilled > 0 && totalUsed > 0) {
-            const ratio = totalFilled / totalUsed;
+        if (pairs > 0) {
+            const ratio = tracked / actual;
             this._dom.kfRatio.textContent = ratio.toFixed(3);
             // Color-code: green near 1.0, yellow if off by 5%, red if off by 10%
             const dev = Math.abs(ratio - 1.0);
@@ -1023,13 +1052,14 @@ class FuelOverlay {
                 (dev < 0.05 ? 'fo-kf-good' : dev < 0.10 ? 'fo-kf-warn' : 'fo-kf-bad');
             this._dom.kfGuidance.textContent =
                 `New K-Factor = Current K-Factor × ${ratio.toFixed(3)}` +
-                (ratio > 1.0 ? '  (increase K-factor — fuel flow reads low)' : ratio < 1.0 ? '  (decrease K-factor — fuel flow reads high)' : '  (K-factor accurate)');
+                (ratio > 1.0 ? '  (increase K-factor — tracked burn higher than actual)'
+                    : ratio < 1.0 ? '  (decrease K-factor — tracked burn lower than actual)'
+                    : '  (K-factor accurate)');
         } else {
             this._dom.kfRatio.textContent = '--';
             this._dom.kfRatio.className = 'fo-kfactor-val fo-kfactor-ratio';
-            this._dom.kfGuidance.textContent = totalFilled > 0
-                ? 'Record more tic measurements while fuel is tracked to compute ratio.'
-                : 'Record fuel stops to compute ratio.';
+            this._dom.kfGuidance.textContent =
+                'Record a tic measurement (APPLY TIC or RECORD FUEL STOP) at the start and end of a leg flown with fuel tracked to compute ratio.';
         }
     }
 
