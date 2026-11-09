@@ -383,10 +383,13 @@ class CloudForecastStore {
         const models = opts.rrfsOnly ? CLOUD_MODELS.slice(0, 1) : CLOUD_MODELS;
         let lastErr = null;
         for (const m of models) {
+            // Superseded (the route changed) before this model was tried: don't spend another request.
+            if (opts.isCurrent && !opts.isCurrent()) return null;
             // 15 s until the response starts, then 30 s for the body (one limit for both also cut off a
             // slow body download -- the model-winds review, #212).
             const ctl = new AbortController();
-            let timer = setTimeout(() => ctl.abort(), 15000);
+            const timeout = () => ctl.abort(new DOMException('cloud fetch timed out', 'TimeoutError'));
+            let timer = setTimeout(timeout, 15000);
             let resp, json;
             try {
                 resp = await fetch(cloudBuildUrl(points, m.id), { signal: ctl.signal });
@@ -398,7 +401,7 @@ class CloudForecastStore {
                 if (resp.status === 429) throw lastErr;
                 continue;
             }
-            timer = setTimeout(() => ctl.abort(), 30000);
+            timer = setTimeout(timeout, 30000);
             try {
                 json = await resp.json();
             } finally {
@@ -413,6 +416,16 @@ class CloudForecastStore {
             return record;
         }
         throw lastErr || new Error('Cloud fetch failed');
+    }
+
+    /** The stored record, or null when there is none or IndexedDB does not answer within timeoutMs
+     *  (a blocked open never settles -- see open()). */
+    async current(timeoutMs = 3000) {
+        if (this._data) return this._data;
+        return Promise.race([
+            this.load().catch(() => null),
+            new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+        ]);
     }
 
     /** Cache-only read. Returns null when there is nothing usable. */

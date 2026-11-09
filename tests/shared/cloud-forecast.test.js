@@ -527,3 +527,25 @@ describe('fetchAndStore options (review of #213): rrfsOnly, isCurrent, 429 statu
         await expect(s.fetchAndStore(FIX_POINTS)).rejects.toMatchObject({ status: 429 });
     });
 });
+
+describe('fetchAndStore: a superseded request stops before the GFS fallback (review of bbd645c)', () => {
+    afterEach(() => { delete globalThis.fetch; });
+    it('RRFS has no cloud values but the route has changed: no GFS request, returns null', async () => {
+        const calls = [];
+        const empty = (Array.isArray(FIXTURE) ? FIXTURE : [FIXTURE]).map((loc) => ({ ...loc, hourly: Object.fromEntries(Object.entries(loc.hourly).map(([k, v]) => [k, k === 'time' ? v : v.map(() => null)])) }));
+        globalThis.fetch = async (url) => { calls.push(new URL(url).searchParams.get('models')); return { ok: true, status: 200, json: async () => empty }; };
+        let current = true;
+        const s = new CloudForecastStore(); s._save = async () => {};
+        const p = s.fetchAndStore(FIX_POINTS, { isCurrent: () => current });
+        current = false;
+        expect(await p).toBeNull();
+        expect(calls).toEqual(['ncep_rrfs_conus']);
+    });
+    it('current(): the stored record, or null if IndexedDB does not answer within the limit', async () => {
+        const s = new CloudForecastStore();
+        s.load = () => new Promise(() => {});
+        expect(await s.current(20)).toBeNull();
+        s._data = { routeHash: 'x' };
+        expect(await s.current(20)).toEqual({ routeHash: 'x' });
+    });
+});
