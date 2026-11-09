@@ -63,6 +63,9 @@ describe('checklist.json', () => {
         expect(item.response).toBe('MATCHES SELECTOR');
         expect(item.link).toBe('fuel-tank');
         expect(item.note).toMatch(/burn/i);
+        // Re-review I1: tapping the badge that already matches confirms; otherwise the other tank.
+        expect(item.note).toMatch(/already matches.*tap it to confirm/i);
+        expect(item.note).toMatch(/otherwise tap the other tank/i);
     });
 
     it('is appended last, so saved checks (keyed by index) keep their items', () => {

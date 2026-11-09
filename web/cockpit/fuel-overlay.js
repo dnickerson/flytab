@@ -5,13 +5,19 @@
  */
 
 class FuelOverlay {
-    /** K-factor outlier gate (Ruling 15d, PR #214 finding 4): with fewer than
-     *  KF_MEDIAN_MIN_LEGS candidate legs, a leg whose tracked ÷ actual is more than
-     *  this fraction off 1.0 is excluded; with at least that many, a leg more than
-     *  this fraction off the MEDIAN ratio of the candidate legs is excluded, so a
-     *  consistent mis-calibration (every leg ~1.30) is shown instead of hidden. */
+    /** K-factor outlier gate (Ruling 15d, PR #214 finding 4 + re-review ruling).
+     *  Default: a leg whose tracked ÷ actual is more than KF_OUTLIER_FRAC off 1.0 is
+     *  excluded. The gate is centred on the MEDIAN ratio of the candidate legs
+     *  instead only when the median can be trusted: ≥ KF_MEDIAN_MIN_LEGS candidates
+     *  AND (|median − 1| ≤ KF_OUTLIER_FRAC, OR (≥ KF_MEDIAN_SHIFT_MIN_LEGS
+     *  candidates AND ≥ KF_MEDIAN_SHIFT_AGREE of them within KF_OUTLIER_FRAC of the
+     *  median)). So a correction larger than 25 % needs ≥ 4 consistent legs, and two
+     *  bad legs (e.g. APPLY-TIC top-offs) cannot become the median and push out a
+     *  good one. */
     static KF_OUTLIER_FRAC = 0.25;
     static KF_MEDIAN_MIN_LEGS = 3;
+    static KF_MEDIAN_SHIFT_MIN_LEGS = 4;
+    static KF_MEDIAN_SHIFT_AGREE = 0.75;
     /** K-factor: the New K-Factor guidance needs at least this much actual burn over
      *  the counted legs (Ruling 16). */
     static KF_MIN_ACTUAL_GAL = 30;
@@ -1069,10 +1075,11 @@ class FuelOverlay {
      *   unconfirmed — next's tracked figure was stale (next.tracked_stale)
      *   unusable   — actual or tracked used is not positive (e.g. the tic rose with no
      *                fuel stop recorded)
-     *   outlier    — with ≥ KF_MEDIAN_MIN_LEGS candidate legs (legs that passed every
-     *                rule above): |ratio ÷ median ratio − 1| > KF_OUTLIER_FRAC; with
-     *                fewer: |tracked ÷ actual − 1| > KF_OUTLIER_FRAC (e.g. a partial
-     *                top-off recorded with APPLY TIC instead of RECORD FUEL STOP)
+     *   outlier    — |ratio ÷ centre − 1| > KF_OUTLIER_FRAC over the candidate legs
+     *                (legs that passed every rule above). The centre is 1.0, or the
+     *                median ratio when it can be trusted (see KF_OUTLIER_FRAC). E.g.
+     *                a partial top-off recorded with APPLY TIC instead of RECORD
+     *                FUEL STOP.
      * Ratio = Σtracked ÷ Σactual over counted legs. Dynon's rule (FlightDEK-D180
      * Installation Guide p. 6-14: "if your GALS USED reads higher than you expect,
      * increase the K-factor"), so New K = Current K × Ratio.
@@ -1140,15 +1147,21 @@ class FuelOverlay {
             candidates.push({ a, t, r: t / a });
         }
 
+        const F = FuelOverlay.KF_OUTLIER_FRAC;
         let center = 1;
         if (candidates.length >= FuelOverlay.KF_MEDIAN_MIN_LEGS) {
             const rs = candidates.map(c => c.r).sort((x, y) => x - y);
             const mid = Math.floor(rs.length / 2);
-            center = rs.length % 2 ? rs[mid] : (rs[mid - 1] + rs[mid]) / 2;
+            const median = rs.length % 2 ? rs[mid] : (rs[mid - 1] + rs[mid]) / 2;
+            const near = rs.filter(r => Math.abs(r / median - 1) <= F).length;
+            const trusted = Math.abs(median - 1) <= F ||
+                (rs.length >= FuelOverlay.KF_MEDIAN_SHIFT_MIN_LEGS &&
+                 near / rs.length >= FuelOverlay.KF_MEDIAN_SHIFT_AGREE);
+            if (trusted) center = median;
         }
         let actual = 0, tracked = 0, pairs = 0;
         for (const c of candidates) {
-            if (Math.abs(c.r / center - 1) > FuelOverlay.KF_OUTLIER_FRAC) { excluded.outlier++; continue; }
+            if (Math.abs(c.r / center - 1) > F) { excluded.outlier++; continue; }
             actual += c.a;
             tracked += c.t;
             pairs++;

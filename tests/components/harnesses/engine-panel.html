@@ -20,6 +20,11 @@
             get: () => null,
             aircraft: () => null,
         };
+        // engine-panel.js reads fuel on board from the tablet (FuelState.measuredGallons,
+        // PR #214), not from the engine frame. A tracked 24.9 gal figure here.
+        const FuelState = {
+            measuredGallons: () => ({ gallons: 24.9, stale: false }),
+        };
     </script>
     <!-- Load engine-panel.js directly — no engine-client.js needed because
          the harness injects a MockEngineClient (plain EventTarget). -->

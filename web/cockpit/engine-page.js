@@ -439,6 +439,13 @@ class EnginePage {
         const container = this._el.querySelector('.ep-container');
         if (!el) return;
 
+        // Engine data held over from an older frame (Pi disconnected, no fresh frame
+        // for > 5 s, or a frozen EDM row): the ENG page greys it as stale below, and
+        // update() hides the D-180 side of the TRACKED vs D-180 row on the same signal.
+        this._feedStale = !!data && (pollTime === 0 || Math.round((Date.now() - pollTime) / 1000) > 5 ||
+            (typeof EngineClient !== 'undefined' && typeof EngineClient.edmCurrent === 'function' &&
+             !EngineClient.edmCurrent(data)));
+
         if (!data || pollTime === 0) {
             el.textContent = 'ENGINE MON. OFFLINE';
             el.className = 'ep-data-age ep-data-age--offline';
@@ -707,7 +714,7 @@ class EnginePage {
         // after the EMS goes quiet).
         const edmCurrent = typeof EngineClient === 'undefined' ||
             typeof EngineClient.edmCurrent !== 'function' || EngineClient.edmCurrent(d);
-        this._updateTicEdm(edmCurrent ? edmFuelRem : 0);
+        this._updateTicEdm((edmCurrent && !this._feedStale) ? edmFuelRem : 0);
 
         /* ---- Section 6: Efficiency ---- */
         if (fuelFlow > 0 && gs > 40) {

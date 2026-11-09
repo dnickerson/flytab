@@ -6463,7 +6463,7 @@ body.fs-overlay-open .radar-loop-controls {
 .ep-trk-unconf {
     font-family: var(--font-ui);
     font-weight: 800;
-    font-size: 14px;
+    font-size: var(--text-xs);
     color: var(--color-caution-on-light);
 }
 .ep-grade-excellent { background: var(--color-success); color: #000; }
@@ -13379,6 +13379,22 @@ body:has(.checklist-page.visible) > .toast { z-index: 900; }
     font-size: var(--text-md);
     font-weight: 800;
     cursor: pointer;
+}
+
+/* Fuel tanks widget: status line while the checklist reveal is active
+   (FuelTanksDisplay._onBadgeTapReveal: "LEFT already set", "Switched to RIGHT",
+   or why nothing changed). */
+.ftw-reveal-status {
+    margin: 6px 4px 0;
+    padding: 6px 8px;
+    background: var(--bg-primary);
+    border: 2px solid var(--accent);
+    border-radius: 6px;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--text-primary);
+    text-align: center;
 }
 
 /* Fuel tanks widget: badges highlighted by FuelTanksDisplay.revealTankControl()

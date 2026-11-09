@@ -18,6 +18,10 @@ class FuelTankState {
     /** markFlowLost(): with no current frame seen yet this session (app restart), the
      *  engine counts as running if burn was integrated (last_burn_at) this recently. */
     static RECENT_BURN_MS = 2 * 60 * 1000;
+    /** markFlowLost(): the last current frame counts as "engine running" only above
+     *  this RPM. A stopped engine can still report residual flow (3 of 126 recorded
+     *  flights end with RPM 0 and Fuel Flow 0.5-0.9). */
+    static RUNNING_RPM_MIN = 300;
 
     static _state = null;
     static _loaded = false;
@@ -306,20 +310,21 @@ class FuelTankState {
      * figure stops falling while fuel still burns, so it is marked at once
      * (flow_lost_at → needsConfirmation() true) instead of 45 min later (STALE_MS).
      * The engine counts as running when the last CURRENT frame this session had
-     * GPH > 0 (`lastCurrentGph`), or — with no current frame seen yet this session
-     * (`lastCurrentGph` null: app restarted with the data already frozen) — when burn
-     * was integrated within RECENT_BURN_MS. Engine off on the ground (last current
-     * GPH 0, or nothing integrated recently) is not marked.
+     * GPH > 0 and RPM > RUNNING_RPM_MIN, or — with no current frame seen yet this
+     * session (`lastCurrentGph` null: app restarted with the data already frozen) —
+     * when burn was integrated within RECENT_BURN_MS. Engine off on the ground (last
+     * current GPH 0 or RPM ≤ 300, or nothing integrated recently) is not marked.
      * @param {number} nowMs
      * @param {number|null} lastCurrentGph - GPH of the last current frame, null if none
+     * @param {number} [lastCurrentRpm] - RPM of that frame (missing → not running)
      * @returns {boolean} true if the state is (now) marked flow-lost
      */
-    static markFlowLost(nowMs, lastCurrentGph) {
+    static markFlowLost(nowMs, lastCurrentGph, lastCurrentRpm) {
         FuelTankState._load();
         const st = FuelTankState._state;
         if (!st) return false;
         if (st.flow_lost_at) return true;
-        let running = lastCurrentGph > 0;
+        let running = lastCurrentGph > 0 && lastCurrentRpm > FuelTankState.RUNNING_RPM_MIN;
         if (!running && lastCurrentGph == null && st.last_burn_at) {
             const burnMs = new Date(st.last_burn_at).getTime();
             running = Number.isFinite(burnMs) && (nowMs - burnMs) >= 0 &&

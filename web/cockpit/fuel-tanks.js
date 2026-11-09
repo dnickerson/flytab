@@ -22,6 +22,8 @@ class FuelTanksDisplay {
         // Tells FuelTankState.markFlowLost() whether the engine was running when
         // flow data stopped or froze.
         this._lastCurrentGph = null;
+        this._lastCurrentRpm = 0;      // RPM of that frame (markFlowLost needs > 300)
+        this._revealUntil = 0;         // revealTankControl(): badge taps never open the quantity dialog until then
         this._initPanelMode = null;   // 'preflight' | 'recovery' | null (panel closed)
         this._initPanelDirty = false;  // set to true while user is editing, prevents live updates from clobbering
         this._tankCapacity = 18;   // per side, updated from config on init
@@ -86,18 +88,67 @@ class FuelTanksDisplay {
 
     /**
      * Checklist "FlyTab Tank" → SET: show the widget (even if hidden in the layer
-     * panel) and highlight the L / R badges, which set the active tank
-     * (_onBadgeTap → FuelTankState.switchTank).
+     * panel), highlight the L / R badges and enter reveal mode for REVEAL_MS. In
+     * reveal mode a badge tap only confirms or switches the tank
+     * (_onBadgeTapReveal); it never opens the PREFLIGHT FUEL quantity dialog,
+     * whose SET would re-initialise the quantities from an old tic.
      */
     revealTankControl() {
         this.show();
+        this._revealUntil = Date.now() + FuelTanksDisplay.REVEAL_MS;
+        this._setRevealStatus('');
         const badges = [this._dom.badgeL, this._dom.badgeR].filter(Boolean);
         badges.forEach(b => b.classList.add('ftw-badge-attn'));
         if (this._attnTimer) clearTimeout(this._attnTimer);
         this._attnTimer = setTimeout(() => {
             badges.forEach(b => b.classList.remove('ftw-badge-attn'));
+            this._setRevealStatus('');
             this._attnTimer = null;
-        }, FuelTanksDisplay.ATTN_MS);
+        }, FuelTanksDisplay.REVEAL_MS);
+    }
+
+    _inRevealMode() { return Date.now() < this._revealUntil; }
+
+    _setRevealStatus(msg) {
+        const el = this._dom.revealStatus;
+        if (!el) return;
+        el.textContent = msg;
+        el.style.display = msg ? '' : 'none';
+    }
+
+    /**
+     * Badge tap in reveal mode (checklist FlyTab Tank → SET). Never opens the
+     * quantity dialog:
+     *  - no tank state, or requires_confirm (45+ min without a sample): nothing is
+     *    changed; the status line says to apply a tic on the FUEL screen.
+     *  - the already-active badge: confirmed in place ("LEFT already set"). Status
+     *    only — markConfirmed() is NOT called: it would clear requires_confirm (a
+     *    quantity confirmation) and reset last_sample_at, which drops the burn since
+     *    the last sample; with requires_confirm false it does nothing else.
+     *  - the other badge: FuelTankState.switchTank, checked by reading the state back.
+     */
+    _onBadgeTapReveal(tank) {
+        const name = (t) => (t === 'R' ? 'RIGHT' : 'LEFT');
+        const state = FuelTankState.getState();
+        if (!state) {
+            this._setRevealStatus('No fuel entered — apply a tic on the FUEL screen (MORE → Fuel Entry)');
+            return;
+        }
+        if (state.requires_confirm) {
+            this._setRevealStatus('Tank state not confirmed — apply a tic on the FUEL screen (MORE → Fuel Entry)');
+            return;
+        }
+        if (state.active_tank === tank) {
+            this._setRevealStatus(`${name(tank)} already set`);
+            return;
+        }
+        FuelTankState.switchTank(tank);
+        const after = FuelTankState.getState();
+        if (after && after.active_tank === tank) {
+            this._setRevealStatus(`Switched to ${name(tank)}`);
+        } else {
+            this._setRevealStatus(`Could not switch to ${name(tank)} — apply a tic on the FUEL screen (MORE → Fuel Entry)`);
+        }
     }
 
     show() { if (this._el) { this._el.style.display = ''; try { localStorage.setItem('flypi_fuel_widget_visible', 'true');  } catch {} } }
@@ -143,12 +194,14 @@ class FuelTanksDisplay {
         if (edmCurrent) {
             const n = Number(gph);
             this._lastCurrentGph = Number.isFinite(n) ? n : 0;
+            const r = Number(d.RPM ?? d.rpm);
+            this._lastCurrentRpm = Number.isFinite(r) ? r : 0;
             if (gph > 0) FuelTankState.onSample(gph, Date.now());
         } else {
             // Burn is not being integrated. If the engine was running, the tracked
             // figure now reads high: mark it UNCONFIRMED at once (cleared by the next
             // integrated sample).
-            FuelTankState.markFlowLost(Date.now(), this._lastCurrentGph);
+            FuelTankState.markFlowLost(Date.now(), this._lastCurrentGph, this._lastCurrentRpm);
         }
         this._updateSenderDisplay(d, edmCurrent);
         // Update endurance when GPH changes without a state change
@@ -164,7 +217,7 @@ class FuelTanksDisplay {
             if (el && el.textContent !== '') el.textContent = 's:\u2014';
         }
         if (typeof FuelTankState !== 'undefined') {
-            FuelTankState.markFlowLost(Date.now(), this._lastCurrentGph);
+            FuelTankState.markFlowLost(Date.now(), this._lastCurrentGph, this._lastCurrentRpm);
         }
         this._renderEndurance();
     }
@@ -219,6 +272,8 @@ class FuelTanksDisplay {
                 </div>
             </div>
 
+            <div class="ftw-reveal-status" id="ftw-reveal-status" style="display:none"></div>
+
             <div class="ftw-init-panel" id="ftw-init-panel" style="display:none">
                 <div class="ftw-init-title" id="ftw-init-title">PREFLIGHT FUEL</div>
                 <div class="ftw-init-row">
@@ -268,6 +323,7 @@ class FuelTanksDisplay {
             imbal:         this._el.querySelector('#ftw-imbal'),
             editBtn:       this._el.querySelector('#ftw-edit-btn'),
             initPanel:     this._el.querySelector('#ftw-init-panel'),
+            revealStatus:  this._el.querySelector('#ftw-reveal-status'),
             initTitle:     this._el.querySelector('#ftw-init-title'),
             initL:         this._el.querySelector('#ftw-init-l'),
             initR:         this._el.querySelector('#ftw-init-r'),
@@ -307,6 +363,8 @@ class FuelTanksDisplay {
      * Tank badge tap
      * ----------------------------------------------------------------*/
     _onBadgeTap(tank) {
+        if (this._inRevealMode()) { this._onBadgeTapReveal(tank); return; }
+        if (this._dom.revealStatus && this._dom.revealStatus.style.display !== 'none') this._setRevealStatus('');
         // getState() re-checks the 45-min staleness, so requires_confirm is current.
         // Not needsConfirmation(): a lost fuel-flow feed (flow_lost_at) must not stop
         // the pilot switching tanks in flight — the switch still has to be recorded.
@@ -668,5 +726,6 @@ class FuelTanksDisplay {
 
 }
 
-/** How long revealTankControl() highlights the tank badges. */
-FuelTanksDisplay.ATTN_MS = 6000;
+/** How long revealTankControl() keeps reveal mode (badges outlined; badge taps
+ *  confirm or switch the tank and never open the quantity dialog). */
+FuelTanksDisplay.REVEAL_MS = 30000;

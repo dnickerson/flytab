@@ -332,50 +332,75 @@ describe('finding 3: tracked leg burn is the flow burn, even when a tank clamped
     });
 });
 
-describe('finding 4: outlier gate relative to the median with ≥ 3 candidate legs', () => {
+describe('finding 4 (re-review ruling): median gate only when the median is trustworthy', () => {
+    // Median gate when ≥ 3 candidate legs AND (|median − 1| ≤ 0.25, OR (≥ 4 legs AND
+    // ≥ 75 % of them within 25 % of the median)); otherwise |ratio − 1| > 0.25.
     const e = (min, tic, trk, i) => ({
         measured_at: new Date(Date.UTC(2026, 10, 1, 12, 0) + min * 60000).toISOString(),
         total_gal: tic, tracked_gal: trk, tracked_since: 'i' + i, tank_init_at: 'i' + (i + 1),
         tracked_stale: false, dropped_applied_since_init_gal: 0,
     });
+    const legs = (pairs) => {            // pairs: [actual, tracked] per leg, tic starts at 100
+        let tic = 100;
+        const out = [e(0, tic, tic, 0)];
+        pairs.forEach(([a, t], k) => { const prev = tic; tic -= a; out.push(e(60 * (k + 1), tic, prev - t, k + 1)); });
+        localStorage.setItem('flypi_fuel_history', JSON.stringify(out));
+    };
 
-    it('three legs at ~1.30: counted, ratio 1.300 and the guidance (Σactual 30 gal)', () => {
-        localStorage.setItem('flypi_fuel_history', JSON.stringify([
-            e(0, 40, 40, 0),
-            e(60, 30, 27, 1),        // actual 10, tracked 13
-            e(120, 20, 17, 2),       // actual 10, tracked 13
-            e(180, 10, 7, 3),        // actual 10, tracked 13
-        ]));
+    it('three legs at 1.30: median 1.30 is not trusted with only 3 legs → absolute gate excludes them', () => {
+        legs([[10, 13], [10, 13], [10, 13]]);
         const p = panel();
-        expect(p.filled).toBe('30.0 gal');
-        expect(p.used).toBe('39.0 gal');
+        expect(p.ratio).toBe('--');
+        expect(p.excluded).toBe('3 legs excluded: 3 more than 25% off');
+    });
+
+    it('four consistent legs at 1.30: counted, ratio 1.300 and the guidance', () => {
+        legs([[10, 13], [10, 13], [10, 13], [10, 13]]);
+        const p = panel();
+        expect(p.filled).toBe('40.0 gal');
+        expect(p.used).toBe('52.0 gal');
         expect(p.ratio).toBe('1.300');
         expect(p.guidance).toMatch(/New K-Factor = Current K-Factor × 1\.300\s+\(increase K-factor/);
         expect(p.excludedShown).toBe(false);
     });
 
+    it('two bad legs (2.0) + one good (1.0): the bad legs are excluded, the good one counts', () => {
+        legs([[10, 20], [10, 10], [10, 20]]);
+        const p = panel();
+        expect(p.filled).toBe('10.0 gal');
+        expect(p.used).toBe('10.0 gal');
+        expect(p.ratio).toBe('1.000');
+        expect(p.excluded).toBe('2 legs excluded: 2 more than 25% off');
+    });
+
+    it('two bad + two good: falls back, the bad legs are excluded', () => {
+        legs([[10, 20], [10, 10], [10, 20], [10, 10.2]]);
+        const p = panel();
+        expect(p.filled).toBe('20.0 gal');
+        expect(p.used).toBe('20.2 gal');
+        expect(p.excluded).toBe('2 legs excluded: 2 more than 25% off');
+    });
+
     it('two consistent legs at 1.30: excluded by the absolute gate, as before', () => {
-        localStorage.setItem('flypi_fuel_history', JSON.stringify([
-            e(0, 40, 40, 0), e(60, 30, 27, 1), e(120, 20, 17, 2),
-        ]));
+        legs([[10, 13], [10, 13]]);
         const p = panel();
         expect(p.ratio).toBe('--');
         expect(p.excluded).toBe('2 legs excluded: 2 more than 25% off');
     });
 
     it('one garbage leg among four normal ones: only the garbage leg is excluded', () => {
-        localStorage.setItem('flypi_fuel_history', JSON.stringify([
-            e(0, 50, 50, 0),
-            e(60, 40, 39.8, 1),      // 10 / 10.2
-            e(120, 30, 30.1, 2),     // 10 / 9.9
-            e(180, 25, 15, 3),       // 5 / 15  → 3.0: garbage
-            e(240, 15, 14.8, 4),     // 10 / 10.2
-            e(300, 5, 5.1, 5),       // 10 / 9.9
-        ]));
+        legs([[10, 10.2], [10, 9.9], [5, 15], [10, 10.2], [10, 9.9]]);
         const p = panel();
         expect(p.filled).toBe('40.0 gal');
         expect(p.used).toBe('40.2 gal');
         expect(p.excluded).toBe('1 leg excluded: 1 more than 25% off');
+    });
+
+    it('five legs, four at 1.30 and one at 1.0: median gate (≥ 75 % near the median), all counted', () => {
+        legs([[10, 13], [10, 13], [10, 10], [10, 13], [10, 13]]);
+        const p = panel();
+        expect(p.excludedShown).toBe(false);
+        expect(p.ratio).toBe('1.240');
     });
 });
 

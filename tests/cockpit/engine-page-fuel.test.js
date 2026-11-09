@@ -214,7 +214,7 @@ describe('EnginePage FUEL STATUS — stale tracked state is marked, not silently
     it('flow lost while the engine ran (PR #214 finding 1): banner shown at once, says engine data was lost', () => {
         setup({ tankL: 9, tankR: 9 });
         FuelTankState._state.last_burn_at = new Date().toISOString();
-        expect(FuelTankState.markFlowLost(Date.now(), 9)).toBe(true);
+        expect(FuelTankState.markFlowLost(Date.now(), 9, 2400)).toBe(true);
         const out = fuelFields(engine);
         expect(out.remaining).toBe('18.0');
         expect(out.staleShown).toBe(true);
@@ -423,6 +423,34 @@ describe('EnginePage TRACKED vs D-180 row (PR #214 finding 6)', () => {
         setup({ tankL: 10, tankR: 8 });
         const out = fuelFields({ gallons_rem: 50, Gallons_Rem: 50, fuel_remaining_gal: 50, Fuel_Remaining: 30, fuel_flow: 0 });
         expect(out.edmTotal).toBe('30.0');
+    });
+
+    it('re-review M2: hidden after a full Pi disconnect / no fresh frames (same signal as the stale styling)', () => {
+        // _updateDataAge (the stale styling) reads EngineClient.edmCurrent, as in the app.
+        globalThis.EngineClient = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
+        setup({ tankL: 10, tankR: 8 });
+        const frame = { Fuel_Remaining: 30, fuel_flow: 0 };
+        window.enginePanel = { lastData: frame, lastPollTime: Date.now() };
+        page._tick();
+        expect(page._dom.ticEdmRow.style.display).toBe('flex');
+        window.enginePanel = { lastData: frame, lastPollTime: 0 };          // disconnect
+        page._tick();
+        expect(page._dom.ticEdmRow.style.display).toBe('none');
+        window.enginePanel = { lastData: frame, lastPollTime: Date.now() - 8000 };   // stale
+        page._tick();
+        expect(page._dom.ticEdmRow.style.display).toBe('none');
+        window.enginePanel = { lastData: frame, lastPollTime: Date.now() };
+        page._tick();
+        expect(page._dom.ticEdmRow.style.display).toBe('flex');
+        delete window.enginePanel;
+        delete globalThis.EngineClient;
+    });
+
+    it('re-review M3: the UNCONFIRMED tag uses a font-size token, not raw px', () => {
+        const m = read('web/style.css').match(/\n\.ep-trk-unconf\s*\{([^}]*)\}/);
+        expect(m).not.toBeNull();
+        expect(m[1]).toMatch(/font-size:\s*var\(--text-/);
+        expect(m[1]).not.toMatch(/font-size:\s*\d+px/);
     });
 
     it('hidden on a frozen frame (EngineClient.edmCurrent false)', () => {

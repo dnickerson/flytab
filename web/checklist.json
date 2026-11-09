@@ -31,7 +31,7 @@
                 { "title": "Tablet WIFI", "response": "CONNECTED", "statusSource": "connectivity", "note": "Connect to Stratux hotspot" },
                 { "title": "Engine Data", "response": "RECORDING", "note": "Auto-starts when RPM > 500" },
                 { "title": "Fuel Selector", "response": "FULLEST TANK" },
-                { "title": "FlyTab Tank", "response": "MATCHES SELECTOR", "link": "fuel-tank", "note": "FlyTab charges every gallon of fuel flow to the tank set here. If it does not match the fuel selector, the tank burn will be off. Tap SET, then tap L or R on the fuel tanks widget." }
+                { "title": "FlyTab Tank", "response": "MATCHES SELECTOR", "link": "fuel-tank", "note": "FlyTab charges every gallon of fuel flow to the tank set here. If it does not match the fuel selector, the tank burn will be off. Tap SET to show the fuel tanks widget: if the outlined active badge already matches the selector, tap it to confirm; otherwise tap the other tank." }
               ]
             },
             {

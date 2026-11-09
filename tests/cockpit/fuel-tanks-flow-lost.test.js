@@ -219,3 +219,89 @@ describe('revealTankControl (checklist FlyTab Tank → SET)', () => {
         expect(FuelTankState.getState().active_tank).toBe('R');
     });
 });
+
+describe('re-review M1: "running" also needs RPM > 300 on the last current frame', () => {
+    it('last current frame RPM 0 / fuel flow 0.7 (shutdown residual), then data lost: not marked', () => {
+        cruise();
+        at(NOW + 1000);
+        client.dispatchEvent(current(0.7, { RPM: 0 }));
+        at(NOW + 1000);
+        client.dispatchEvent(frozen(0.7));
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        expect(stale()).toBe(false);
+    });
+
+    it('a current frame with no RPM field does not count as running', () => {
+        at(NOW + 1000);
+        client.dispatchEvent(new CustomEvent('engine:data', {
+            detail: { serial_connected: true, data: { Fuel_Flow: 9 } } }));
+        client.dispatchEvent(new CustomEvent('engine:disconnect'));
+        expect(stale()).toBe(false);
+    });
+});
+
+describe('re-review I1: badge taps while the checklist reveal is active never open the quantity dialog', () => {
+    const dialogOpen = () => widget._dom.initPanel.style.display === 'flex';
+    const status = () => widget._dom.revealStatus.textContent;
+
+    it('already-active badge: confirms in place, no dialog, tank unchanged', () => {
+        widget.revealTankControl();
+        widget._onBadgeTap('L');
+        expect(dialogOpen()).toBe(false);
+        expect(status()).toBe('LEFT already set');
+        expect(widget._dom.revealStatus.style.display).toBe('');
+        expect(FuelTankState.getState().active_tank).toBe('L');
+    });
+
+    it('the other badge: switches, no dialog', () => {
+        widget.revealTankControl();
+        widget._onBadgeTap('R');
+        expect(dialogOpen()).toBe(false);
+        expect(FuelTankState.getState().active_tank).toBe('R');
+        expect(status()).toBe('Switched to RIGHT');
+    });
+
+    it('requires_confirm (45+ min without a sample): no dialog, no switch, the reason points to the FUEL screen', () => {
+        FuelTankState._state.last_sample_at = new Date(NOW - 50 * 60000).toISOString();
+        FuelTankState._save();
+        expect(FuelTankState.getState().requires_confirm).toBe(true);
+        widget.revealTankControl();
+        for (const t of ['L', 'R']) {
+            widget._onBadgeTap(t);
+            expect(dialogOpen()).toBe(false);
+            expect(status()).toMatch(/FUEL/);
+            expect(status()).toMatch(/tic/i);
+        }
+        expect(FuelTankState.getState().active_tank).toBe('L');
+        expect(FuelTankState.getState().requires_confirm).toBe(true);   // not confirmed by a tap
+    });
+
+    it('no fuel entered at all: no dialog, reason shown', () => {
+        FuelTankState._state = null; localStorage.clear(); FuelTankState._loaded = true;
+        widget.revealTankControl();
+        widget._onBadgeTap('L');
+        expect(dialogOpen()).toBe(false);
+        expect(status()).toMatch(/FUEL/);
+    });
+
+    it('outside reveal mode the existing behaviour is unchanged', () => {
+        widget._onBadgeTap('L');                 // active badge → quantity dialog
+        expect(dialogOpen()).toBe(true);
+        widget._dom.initPanel.style.display = 'none';
+        widget._onBadgeTap('R');                 // other badge → switch
+        expect(FuelTankState.getState().active_tank).toBe('R');
+        FuelTankState._state.last_sample_at = new Date(NOW - 50 * 60000).toISOString();
+        FuelTankState._save();
+        widget._onBadgeTap('L');                 // requires_confirm → dialog
+        expect(dialogOpen()).toBe(true);
+    });
+
+    it('reveal mode ends after REVEAL_MS; the status line clears', () => {
+        widget.revealTankControl();
+        widget._onBadgeTap('L');
+        at(NOW + FuelTanksDisplay.REVEAL_MS + 1000);
+        widget._onBadgeTap('L');
+        expect(dialogOpen()).toBe(true);
+        expect(widget._dom.revealStatus.style.display).toBe('none');
+    });
+});
