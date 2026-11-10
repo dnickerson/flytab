@@ -48,6 +48,7 @@ function build({ tracked = true, staleMinutes = 0, gph = 0, L = 15, R = 14 } = {
     localStorage.clear();
     FuelTankState._state = null;
     FuelTankState._loaded = false;
+    FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
     if (!tracked) {
         FuelTankState._loaded = true;          // loaded, but nothing tracked
     } else {

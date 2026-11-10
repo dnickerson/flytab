@@ -46,6 +46,7 @@ function setup({ tankL = null, tankR = null, manual = null, measurement = null,
     localStorage.clear();
     FuelTankState._state = null;
     FuelTankState._loaded = false;
+    FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
 
     globalThis.Settings = { fuelManualOverride: manual, fuelMeasurement: measurement };
     globalThis.CockpitConfig = {
@@ -227,6 +228,25 @@ describe('EnginePage FUEL STATUS — stale tracked state is marked, not silently
         expect(out.staleShown).toBe(true);
         expect(page._dom.fuelStale.textContent).toMatch(/ENGINE DATA LOST/);
         expect(page._dom.fuelStale.textContent).toMatch(/REMAINING MAY READ HIGH/);
+    });
+
+    it('stuck fuel-flow sender (flow_lost_reason zero_flow): its own wording, not "engine data lost"', () => {
+        setup({ tankL: 9, tankR: 9 });
+        FuelTankState._state.flow_lost_at = new Date().toISOString();
+        FuelTankState._state.flow_lost_reason = 'zero_flow';
+        FuelTankState._save();
+        fuelFields(engine);
+        expect(page._dom.fuelStale.textContent).toBe(EnginePage.FUEL_ZERO_FLOW_TEXT);
+        expect(page._dom.fuelStale.textContent).toMatch(/FUEL FLOW READS 0 WITH THE ENGINE RUNNING/);
+        expect(page._dom.fuelStale.textContent).not.toMatch(/ENGINE DATA LOST/);
+    });
+
+    it('flow lost with no reason stored (state from before the field): data-lost wording', () => {
+        setup({ tankL: 9, tankR: 9 });
+        FuelTankState._state.flow_lost_at = new Date().toISOString();
+        FuelTankState._save();
+        fuelFields(engine);
+        expect(page._dom.fuelStale.textContent).toBe(EnginePage.FUEL_FLOW_LOST_TEXT);
     });
 
     it('the 45-min case keeps its own wording', () => {

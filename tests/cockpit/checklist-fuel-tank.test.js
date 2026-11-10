@@ -42,6 +42,7 @@ beforeEach(() => {
     localStorage.clear();
     FuelTankState._state = null;
     FuelTankState._loaded = false;
+    FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
     globalThis.CockpitConfig = { aircraft: (p) => (p === 'performance.fuel_capacity_gal' ? 36 : undefined) };
     window.app = {
         tabBar: { selectTab: vi.fn() },

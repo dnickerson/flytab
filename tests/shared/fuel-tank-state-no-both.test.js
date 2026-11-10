@@ -16,6 +16,7 @@ function freshState() {
     localStorage.clear();
     FuelTankState._state = null;
     FuelTankState._loaded = false;
+    FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
 }
 
 /** Burn `minutes` at `gph`, stepping at 10s to stay under MAX_SAMPLE_DT_MS. */
@@ -63,6 +64,7 @@ describe('onSample fails safe on an unusable active_tank', () => {
         localStorage.setItem(FuelTankState.STORAGE_KEY, JSON.stringify(persisted));
         FuelTankState._state = null;
         FuelTankState._loaded = false;
+        FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
 
         const start = new Date(persisted.last_sample_at).getTime();
         burn(120, 9, start);   // 2 hours at 9 gph

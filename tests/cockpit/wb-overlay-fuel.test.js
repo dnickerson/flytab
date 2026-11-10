@@ -55,6 +55,7 @@ function setup({ tankL = null, tankR = null, manual = null, measurement = null,
     localStorage.clear();
     FuelTankState._state = null;
     FuelTankState._loaded = false;
+    FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
     chartConfigs = [];
 
     globalThis.Settings = { fuelManualOverride: manual, fuelMeasurement: measurement };

@@ -48,6 +48,7 @@ function restartApp() {
     widget.destroy();
     FuelTankState._state = null;
     FuelTankState._loaded = false;
+    FuelTankState._coveredMs = null;   // a real app restart loses it
     mount();
 }
 
@@ -58,6 +59,7 @@ beforeEach(() => {
     Settings.fuelManualOverride = null;
     FuelTankState._state = null;
     FuelTankState._loaded = false;
+    FuelTankState._coveredMs = null;   // a real app restart loses it
     globalThis.CockpitConfig = {
         get: () => null,
         aircraft: (p) => (p === 'performance.fuel_capacity_gal' ? 36
@@ -204,6 +206,7 @@ describe('F1: real gaps are still booked', () => {
         widget.destroy();
         FuelTankState._state = null;
         FuelTankState._loaded = false;
+        FuelTankState._coveredMs = null;   // a real app restart loses it
         at(NOW + 30 * MIN);                    // app dead; plane lands and shuts down
         mount();
         run(3, 0, 0);
@@ -360,6 +363,7 @@ describe('F1 ruling 2: init() keeps the engine-running knowledge', () => {
         widget.destroy();
         FuelTankState._state = null;
         FuelTankState._loaded = false;
+        FuelTankState._coveredMs = null;   // a real app restart loses it
         at(NOW + 20 * MIN);
         mount();
         run(3, 0, 0);
@@ -405,6 +409,7 @@ describe('review I1: data back after an outage with the engine stopped and resid
         widget.destroy();
         FuelTankState._state = null;
         FuelTankState._loaded = false;
+        FuelTankState._coveredMs = null;   // a real app restart loses it
         at(NOW + 30 * MIN);
         mount();
         run(3, 0.7, 0);
@@ -460,6 +465,51 @@ describe('stuck fuel-flow sender: FF 0 with the engine running for more than 90 
         expect(FuelTankState.isFlowLost()).toBe(true);
         run(1, 6, 1100);
         expect(dropped()).toBeCloseTo(6 * (100 - 10) / 3600, 4);
+    });
+
+    it('N3: app restart 30 s into a stuck stretch, 4.5 min more FF 0 → UNCONFIRMED once 90 s since the last burn; reason zero_flow', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(30, 0, 2400);
+        restartApp();
+        let flaggedAt = null;
+        for (let i = 1; i <= 270; i++) {
+            send(0, 2400);
+            if (flaggedAt == null && FuelTankState.isFlowLost()) flaggedAt = 30 + i;
+        }
+        expect(flaggedAt).toBe(91);
+        expect(FuelTankState.flowLostReason()).toBe('zero_flow');
+        run(1, 8, 2400);
+        expect(dropped()).toBeCloseTo(8 * (301 - 10) / 3600, 4);
+        expect(FuelTankState.isFlowLost()).toBe(false);
+        expect(FuelTankState.flowLostReason()).toBeNull();
+    });
+
+    it('cannot fire after a tic or a seen stop: 60 s FF 0 at idle after a start, after an app restart → not flagged', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(5, 0, 0);                          // seen stop
+        at(NOW + 30 * MIN);
+        FuelTankState.init(12, 12, 'L');       // tic
+        at(NOW + 10 * MIN);
+        run(30, 0, 1000);                      // start, FF 0 at idle
+        restartApp();
+        run(30, 0, 1000);
+        expect(FuelTankState.isFlowLost()).toBe(false);
+    });
+
+    it('stuck-sender reason vs data-lost reason', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        expect(FuelTankState.flowLostReason()).toBe('data');
+        at(NOW + MIN);
+        run(1);
+        expect(FuelTankState.flowLostReason()).toBeNull();
+        run(95, 0, 2400);
+        expect(FuelTankState.flowLostReason()).toBe('zero_flow');
+        FuelTankState.init(10, 10, 'L');
+        expect(FuelTankState.flowLostReason()).toBeNull();
     });
 });
 

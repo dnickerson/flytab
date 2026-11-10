@@ -56,6 +56,7 @@ describe('FuelTankState', () => {
             // survives a save/load round trip, markConfirmed and switchTank
             FuelTankState.markConfirmed();
             FuelTankState._loaded = false;
+            FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
             FuelTankState._load();
             expect(FuelTankState.getState().burned_since_init_gal).toBeCloseTo(1.525, 6);
             FuelTankState.init(10, 10, 'L');
@@ -376,6 +377,7 @@ describe('FuelTankState', () => {
             };
             localStorage.setItem(FuelTankState.STORAGE_KEY, JSON.stringify(switched));
             FuelTankState._loaded = false;
+            FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
 
             // Next telemetry sample arrives 7s after the switch (10s after the last real sample).
             FuelTankState.onSample(10, switchAt + 7000);

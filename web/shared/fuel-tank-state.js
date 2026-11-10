@@ -140,6 +140,11 @@ class FuelTankState {
             // high from that moment. Cleared by the next integrated sample (onSample)
             // or a fresh init(). needsConfirmation() is true while it is set.
             flow_lost_at: null,
+            // Why flow_lost_at is set: 'data' (engine data stopped / froze / an
+            // unobserved stretch) or 'zero_flow' (FF 0 with the engine running for
+            // more than ZERO_FLOW_MAX_MS: a stuck sender). Cleared with flow_lost_at.
+            // Absent in older state (read as 'data').
+            flow_lost_reason: null,
             // Time of the last sample that actually integrated burn (onSample only;
             // init() and markConfirmed() do not set it, unlike last_sample_at).
             // Null here also means "no previous burning sample": the first sample
@@ -274,6 +279,7 @@ class FuelTankState {
         // Flow is integrating again. Any burn during the gap was recorded above as
         // dropped_burn_estimate_gal (the pilot's dropped-burn correction).
         FuelTankState._state.flow_lost_at = null;
+        FuelTankState._state.flow_lost_reason = null;
         if (!FuelTankState._isStoppedRpm(rpm)) {
             FuelTankState._state.engine_stopped_at = null;
             FuelTankState._state.stop_seen_at = null;
@@ -430,6 +436,7 @@ class FuelTankState {
         }
         if (!running) return false;
         st.flow_lost_at = new Date(nowMs).toISOString();
+        st.flow_lost_reason = 'data';
         FuelTankState._save();
         FuelTankState._fire();
         return true;
@@ -481,6 +488,7 @@ class FuelTankState {
                 : (st.last_sample_at ? new Date(st.last_sample_at).getTime() : NaN);
             if (!(nowMs - refMs <= FuelTankState.MAX_SAMPLE_DT_MS)) {
                 st.flow_lost_at = new Date(nowMs).toISOString();
+                st.flow_lost_reason = 'data';
                 FuelTankState._save();
                 FuelTankState._fire();
                 return false;
@@ -547,16 +555,32 @@ class FuelTankState {
         let refMs = lastMs;
         const covMs = FuelTankState._coveredMs;
         if (Number.isFinite(covMs) && !(covMs <= refMs)) refMs = covMs;
-        if (Number.isFinite(refMs) && nowMs >= refMs && (nowMs - refMs) <= FuelTankState.MAX_SAMPLE_DT_MS) {
-            if (Number.isFinite(lastMs) && (nowMs - lastMs) > FuelTankState.ZERO_FLOW_MAX_MS) {
-                FuelTankState._coveredMs = null;
-                st.flow_lost_at = new Date(nowMs).toISOString();
-                FuelTankState._save();
-                FuelTankState._fire();
-                return;
-            }
-            FuelTankState._coveredMs = nowMs;
+        const tooLong = Number.isFinite(lastMs) && (nowMs - lastMs) > FuelTankState.ZERO_FLOW_MAX_MS;
+        const covered = Number.isFinite(refMs) && nowMs >= refMs &&
+            (nowMs - refMs) <= FuelTankState.MAX_SAMPLE_DT_MS;
+        // Coverage broken but the engine is known to have been burning (e.g. the app
+        // restarted mid-stretch: _coveredMs is in memory only). After a tic or a seen
+        // stop, noteEngineRunning() set last_sample_at to the engine start, so this
+        // also counts only time since the start.
+        const burning = !!st.last_burn_at && !st.engine_stopped_at;
+        if (tooLong && (covered || burning)) {
+            FuelTankState._coveredMs = null;
+            st.flow_lost_at = new Date(nowMs).toISOString();
+            st.flow_lost_reason = 'zero_flow';
+            FuelTankState._save();
+            FuelTankState._fire();
+            return;
         }
+        if (covered) FuelTankState._coveredMs = nowMs;
+    }
+
+    /** Why flow is lost: 'zero_flow' (stuck sender), 'data' (engine data lost; also
+     *  for state stored before flow_lost_reason existed), or null when not lost. */
+    static flowLostReason() {
+        FuelTankState._load();
+        const st = FuelTankState._state;
+        if (!st || !st.flow_lost_at) return null;
+        return st.flow_lost_reason === 'zero_flow' ? 'zero_flow' : 'data';
     }
 
     /** True while fuel-flow data is lost with the engine running (markFlowLost). */
