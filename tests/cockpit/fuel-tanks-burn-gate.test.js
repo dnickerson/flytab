@@ -51,7 +51,8 @@ describe('FuelTanksDisplay burn gate (only current EMS data burns fuel)', () => 
         const onSample = vi.spyOn(FuelTankState, 'onSample').mockImplementation(() => {});
         w._handleEngineData({ Fuel_Flow: 9.5 });
         expect(onSample).toHaveBeenCalledTimes(1);
-        expect(onSample).toHaveBeenCalledWith(9.5, expect.any(Number));
+        // Third argument: the frame's RPM (F1; undefined when the frame has none).
+        expect(onSample).toHaveBeenCalledWith(9.5, expect.any(Number), undefined);
     });
 
     it('does not burn from a frozen frame (serial_warning)', () => {

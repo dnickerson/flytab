@@ -122,7 +122,20 @@ class FuelTankState {
             flow_lost_at: null,
             // Time of the last sample that actually integrated burn (onSample only;
             // init() and markConfirmed() do not set it, unlike last_sample_at).
+            // Null here also means "no previous burning sample": the first sample
+            // after init() books no comms gap (onSample), so the time between a tic
+            // and engine start is never offered as dropped burn.
             last_burn_at: null,
+            // Set by noteEngineStopped() when a current frame shows the engine
+            // stopped (RPM <= RUNNING_RPM_MIN). While set, a gap before the next
+            // sample is engine-off time, not dropped burn. Cleared by the next
+            // sample with the engine running (onSample). Absent in older state.
+            engine_stopped_at: null,
+            // Gallons of comms-gap burn estimated since this init(): every amount
+            // onSample() added to dropped_burn_estimate_gal, applied or not. The
+            // K-factor calculator excludes a leg with a real gap (that burn is in the
+            // tic difference but not in the flow burn). Absent in older state.
+            gap_burn_since_init_gal: 0,
         };
         FuelTankState._loaded = true;
         FuelTankState._save();
@@ -131,10 +144,19 @@ class FuelTankState {
 
     /**
      * Process one engine data sample. Integrates fuel flow against active tank.
+     * A gap longer than MAX_SAMPLE_DT_MS since last_sample_at integrates only the
+     * capped dt; the rest is added to dropped_burn_estimate_gal (the pilot's
+     * APPLY CORRECTION prompt) ONLY when the engine was burning at the last
+     * integrated sample (last_burn_at set — never right after init()) and no engine
+     * stop was seen since (engine_stopped_at null). Otherwise the gap was engine-off
+     * time and books nothing.
      * @param {number} gph - Fuel flow in gallons per hour (must be > 0)
      * @param {number} nowMs - Current timestamp (Date.now())
+     * @param {number} [rpm] - RPM of this frame. A finite RPM <= RUNNING_RPM_MIN
+     *   (residual flow on a stopped engine) integrates as before but does not clear
+     *   engine_stopped_at; any other value (incl. missing) clears it.
      */
-    static onSample(gph, nowMs) {
+    static onSample(gph, nowMs, rpm) {
         FuelTankState._load();
         if (!FuelTankState._state || FuelTankState._state.requires_confirm) return;
         if (!gph || gph <= 0) return;
@@ -147,10 +169,14 @@ class FuelTankState {
         if (dtMs <= 0) return;
 
         const droppedMs = rawDtMs - dtMs;
-        if (droppedMs > 0) {
+        const gapWasBurning = !!FuelTankState._state.last_burn_at && !FuelTankState._state.engine_stopped_at;
+        if (droppedMs > 0 && gapWasBurning) {
             const droppedGal = gph * (droppedMs / 1000) / 3600;
             FuelTankState._state.dropped_burn_estimate_gal =
                 (FuelTankState._state.dropped_burn_estimate_gal || 0) + droppedGal;
+            if (typeof FuelTankState._state.gap_burn_since_init_gal === 'number') {
+                FuelTankState._state.gap_burn_since_init_gal += droppedGal;
+            }
         }
 
         const burned = gph * (dtMs / 1000) / 3600;
@@ -180,6 +206,7 @@ class FuelTankState {
         // Flow is integrating again. Any burn during the gap was recorded above as
         // dropped_burn_estimate_gal (the pilot's dropped-burn correction).
         FuelTankState._state.flow_lost_at = null;
+        if (!FuelTankState._isStoppedRpm(rpm)) FuelTankState._state.engine_stopped_at = null;
 
         const diff = Math.abs(FuelTankState._state.left_gal - FuelTankState._state.right_gal);
         FuelTankState._state.imbalance = (
@@ -334,6 +361,53 @@ class FuelTankState {
         st.flow_lost_at = new Date(nowMs).toISOString();
         FuelTankState._save();
         FuelTankState._fire();
+        return true;
+    }
+
+    /** A finite RPM at or below RUNNING_RPM_MIN: the engine is stopped. */
+    static _isStoppedRpm(rpm) {
+        return typeof rpm === 'number' && Number.isFinite(rpm) && rpm <= FuelTankState.RUNNING_RPM_MIN;
+    }
+
+    /**
+     * A CURRENT engine frame shows the engine stopped (RPM <= RUNNING_RPM_MIN, even
+     * with residual fuel flow). Sets engine_stopped_at, so a gap before the next
+     * sample is not booked as dropped burn (onSample); the next sample with the
+     * engine running clears it.
+     *
+     * Exception — a stop seen right after an unobserved stretch that began with the
+     * engine burning does not cancel that stretch: the engine may have run for most
+     * of it (landed and shut down during a data outage, or the app was closed in
+     * flight). That is: burn was integrated (last_burn_at), no stop was seen, and
+     * there was no current frame for more than MAX_SAMPLE_DT_MS before this one
+     * (`prevFrameMs`, the previous current frame this app session; null after an app
+     * start, when last_sample_at is used instead). Then the figure is marked
+     * flow-lost (UNCONFIRMED; already so after a data outage with the engine
+     * running) and engine_stopped_at stays null, so the stretch is booked as dropped
+     * burn at the next sample (an over-estimate that includes engine-off time; the
+     * pilot reviews it before applying). While flow_lost_at is set, no stop is noted.
+     * @param {number} nowMs
+     * @param {number|null} prevFrameMs - time of the previous current frame, null if none
+     * @returns {boolean} true if the state now holds a stop (engine_stopped_at)
+     */
+    static noteEngineStopped(nowMs, prevFrameMs) {
+        FuelTankState._load();
+        const st = FuelTankState._state;
+        if (!st) return false;
+        if (st.flow_lost_at) return false;
+        if (st.engine_stopped_at) return true;
+        if (st.last_burn_at) {
+            const refMs = Number.isFinite(prevFrameMs) ? prevFrameMs
+                : (st.last_sample_at ? new Date(st.last_sample_at).getTime() : NaN);
+            if (!(nowMs - refMs <= FuelTankState.MAX_SAMPLE_DT_MS)) {
+                st.flow_lost_at = new Date(nowMs).toISOString();
+                FuelTankState._save();
+                FuelTankState._fire();
+                return false;
+            }
+        }
+        st.engine_stopped_at = new Date(nowMs).toISOString();
+        FuelTankState._save();
         return true;
     }
 
