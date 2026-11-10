@@ -201,7 +201,9 @@ class FuelTanksDisplay {
             // Engine stopped (RPM <= 300, even with residual flow): a gap before the
             // next sample is engine-off time, not dropped burn. Noted before
             // onSample so the residual-flow sample of this same frame cannot clear it.
-            // A missing RPM is not taken as a stop.
+            // A missing RPM is not taken as a stop. RPM only, never fuel flow: recorded
+            // flights show FF 0 at 1000-1900 RPM with the engine running (see
+            // FuelTankState.noteEngineStopped).
             // Engine running (RPM > 300, even with the sender reading 0 at idle): at an
             // engine start this makes the start the reference for later gaps.
             if (Number.isFinite(r) && r <= FuelTankState.RUNNING_RPM_MIN) {

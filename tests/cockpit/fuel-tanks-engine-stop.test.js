@@ -258,3 +258,90 @@ describe('F1: engine start with the fuel-flow sender reading 0 at idle (seen in 
         expect(st.last_burn_at).toBeTruthy();
     });
 });
+
+describe('F1 ruling 2: init() keeps the engine-running knowledge', () => {
+    it('recovery CONFIRM / widget SET during an in-flight outage, data back 5 min later: ~5 min booked', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        expect(FuelTankState.isFlowLost()).toBe(true);
+        at(NOW + 2 * MIN);
+        FuelTankState.init(14, 15, 'L');       // what the recovery panel / SET call
+        expect(FuelTankState.getState().dropped_burn_estimate_gal).toBe(0);
+        at(NOW + 5 * MIN);
+        run(1);
+        expect(dropped()).toBeCloseTo(9 * (5 * 60 + 1 - 10) / 3600, 4);
+        expect(FuelTankState.getState().gap_burn_since_init_gal).toBeCloseTo(9 * (5 * 60 + 1 - 10) / 3600, 4);
+    });
+
+    it('re-entry in flight with data flowing (engine running, no outage): the outage after it is booked from the re-entry', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        FuelTankState.init(14, 15, 'L');
+        client.dispatchEvent(new CustomEvent('engine:disconnect'));
+        at(NOW + 3 * MIN);
+        run(1);
+        expect(dropped()).toBeCloseTo(9 * (3 * 60 + 1 - 10) / 3600, 4);
+    });
+
+    it('APPLY TIC on the ground after a normal shutdown, start 20 min later: 0', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(5, 0, 0);
+        at(NOW + 5 * MIN);
+        FuelTankState.init(12, 12, 'L');
+        at(NOW + 20 * MIN);
+        run(30, 6, 1000);
+        expect(dropped()).toBe(0);
+    });
+
+    it('fresh install (no prior state): APPLY TIC, start 20 min later: 0', () => {
+        expect(FuelTankState.getState()).toBeNull();
+        FuelTankState.init(18, 18, 'L');
+        expect(FuelTankState.getState().last_burn_at).toBeNull();
+        at(NOW + 20 * MIN);
+        run(30, 9, 2400);
+        expect(dropped()).toBe(0);
+    });
+
+    it('prior state stale (> 45 min, no stop seen, e.g. Pi off before shutdown): APPLY TIC next day, start later: 0', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);                               // last frame burning, no stop seen
+        at(NOW + 18 * 60 * MIN);               // next day
+        FuelTankState.init(12, 12, 'L');
+        expect(FuelTankState.getState().last_burn_at).toBeNull();
+        at(NOW + 20 * MIN);
+        run(30, 6, 1000);
+        expect(dropped()).toBe(0);
+    });
+
+    it('outage in flight, landed: data back with the engine stopped (UNCONFIRMED), APPLY TIC, start 20 min later: 0', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        at(NOW + 10 * MIN);
+        run(5, 0, 0);
+        expect(FuelTankState.isFlowLost()).toBe(true);
+        at(NOW + 5 * MIN);
+        FuelTankState.init(10, 10, 'L');       // pilot re-enters fuel, as the manual says
+        expect(FuelTankState.isFlowLost()).toBe(false);
+        at(NOW + 20 * MIN);
+        run(30, 6, 1000);
+        expect(dropped()).toBe(0);
+    });
+
+    it('app closed in flight, reopened on the ground with the engine stopped, APPLY TIC, start later: 0', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        widget.destroy();
+        FuelTankState._state = null;
+        FuelTankState._loaded = false;
+        at(NOW + 20 * MIN);
+        mount();
+        run(3, 0, 0);
+        FuelTankState.init(10, 10, 'L');
+        at(NOW + 15 * MIN);
+        run(30, 6, 1000);
+        expect(dropped()).toBe(0);
+    });
+});
