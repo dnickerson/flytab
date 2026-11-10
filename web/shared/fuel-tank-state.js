@@ -22,6 +22,12 @@ class FuelTankState {
      *  this RPM. A stopped engine can still report residual flow (3 of 126 recorded
      *  flights end with RPM 0 and Fuel Flow 0.5-0.9). */
     static RUNNING_RPM_MIN = 300;
+    /** noteZeroFlowFrame(): a running engine (current frames, RPM > RUNNING_RPM_MIN)
+     *  reporting FF 0 for longer than this since the last integrated sample is not a
+     *  low-flow reading but a stuck / failed sender: flow is marked lost. The recorded
+     *  flights (~/engine_analysis, Nov 2026) show FF-0 stretches with the engine
+     *  running of at most about 60 s (taxi / idle; 33 s in 20260130_KLKR-KUZA). */
+    static ZERO_FLOW_MAX_MS = 90 * 1000;
 
     static _state = null;
     static _loaded = false;
@@ -523,18 +529,32 @@ class FuelTankState {
      * (_coveredMs) and the next sample with flow books no gap for it. After a longer
      * gap, or while flow is lost (flow_lost_at), coverage does not move, so the
      * outage is booked at the next sample with flow (the FF-0 frames after it
-     * included: an over-estimate). last_sample_at is not touched, so a sender stuck
-     * at 0 still goes stale (UNCONFIRMED) after STALE_MS.
+     * included: an over-estimate). last_sample_at is not touched.
+     *
+     * Stuck sender: once the unbroken FF-0 stretch has lasted more than
+     * ZERO_FLOW_MAX_MS since the last integrated sample (last_sample_at), it is
+     * implausible as a reading: flow is marked lost (flow_lost_at → UNCONFIRMED at
+     * once) and coverage is dropped, so when real flow returns onSample books the
+     * whole stretch since the last integrated sample as dropped burn, as for an
+     * outage. Shorter stretches book nothing.
      * @param {number} nowMs
      */
     static noteZeroFlowFrame(nowMs) {
         FuelTankState._load();
         const st = FuelTankState._state;
         if (!st || st.requires_confirm || st.flow_lost_at) return;
-        let refMs = st.last_sample_at ? new Date(st.last_sample_at).getTime() : NaN;
+        const lastMs = st.last_sample_at ? new Date(st.last_sample_at).getTime() : NaN;
+        let refMs = lastMs;
         const covMs = FuelTankState._coveredMs;
         if (Number.isFinite(covMs) && !(covMs <= refMs)) refMs = covMs;
         if (Number.isFinite(refMs) && nowMs >= refMs && (nowMs - refMs) <= FuelTankState.MAX_SAMPLE_DT_MS) {
+            if (Number.isFinite(lastMs) && (nowMs - lastMs) > FuelTankState.ZERO_FLOW_MAX_MS) {
+                FuelTankState._coveredMs = null;
+                st.flow_lost_at = new Date(nowMs).toISOString();
+                FuelTankState._save();
+                FuelTankState._fire();
+                return;
+            }
             FuelTankState._coveredMs = nowMs;
         }
     }

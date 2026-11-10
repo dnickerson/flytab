@@ -421,3 +421,45 @@ describe('review I1: data back after an outage with the engine stopped and resid
     });
 });
 
+describe('stuck fuel-flow sender: FF 0 with the engine running for more than 90 s', () => {
+    it('60 s FF 0 at 1200 RPM: 0 booked, never UNCONFIRMED', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        for (let i = 0; i < 60; i++) { send(0, 1200); expect(FuelTankState.needsConfirmation()).toBe(false); }
+        run(1, 6, 1300);
+        expect(dropped()).toBe(0);
+        expect(FuelTankState.needsConfirmation()).toBe(false);
+    });
+
+    it('120 s FF 0 at 2400 RPM: UNCONFIRMED at 90 s; flow returns → ~120 s booked at the resumed GPH; clears', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        for (let i = 1; i <= 120; i++) {
+            send(0, 2400);
+            expect(FuelTankState.isFlowLost()).toBe(i > 90);
+        }
+        expect(FuelTankState.needsConfirmation()).toBe(true);
+        run(1, 8, 2400);
+        expect(dropped()).toBeCloseTo(8 * (121 - 10) / 3600, 4);
+        expect(FuelTankState.isFlowLost()).toBe(false);
+        expect(FuelTankState.needsConfirmation()).toBe(false);
+    });
+
+    it('FF 0 with RPM 0 (engine stopped) never marks', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(200, 0, 0);
+        expect(FuelTankState.isFlowLost()).toBe(false);
+        expect(FuelTankState.needsConfirmation()).toBe(false);
+    });
+
+    it('after APPLY TIC: start with FF 0 at idle for 100 s → UNCONFIRMED; flow → booked from the start', () => {
+        FuelTankState.init(18, 18, 'L');
+        at(NOW + 20 * MIN);
+        run(100, 0, 1000);
+        expect(FuelTankState.isFlowLost()).toBe(true);
+        run(1, 6, 1100);
+        expect(dropped()).toBeCloseTo(6 * (100 - 10) / 3600, 4);
+    });
+});
+
