@@ -166,3 +166,43 @@ describe('incremental pull (cursor set)', () => {
         expect(store.get('id-2000x').route).toBe('LOCAL EDIT');
     });
 });
+
+describe('critical-review fixes', () => {
+    it('a row saved on one page and tombstoned on a later page of the same pull is removed', async () => {
+        // r5 on page 1; deleted on another device while the pull runs -> its tombstone (new seq) on page 2
+        server = rows(1000);                                              // seq 2..1001, includes id-5
+        store = new Map();
+        server.push({ id: 'id-5', seq: 1002, deleted_at: '2026-11-10T00:00:00Z' });
+        server = server.filter((r) => !(r.id === 'id-5' && !r.deleted_at)).concat([{ id: 'id-5', seq: 5, date: '2026-01-01' }]);
+        const lb = makeLogbook();
+        await lb._fetchFromServer();
+        expect(store.has('id-5')).toBe(false);
+        expect(localStorage.getItem('flypi_logbook_seq')).toBe('1002');
+    });
+
+    it('seq numbers with gaps (as on the real account: 1,000 rows were seq 2..2002) page correctly', async () => {
+        server = Array.from({ length: 1212 }, (_, i) => ({ id: `g-${i}`, seq: 2 + 2 * i, date: '2026-01-01' }));
+        store = new Map(server.map((r) => [r.id, { ...r, synced: true }]));
+        store.set('gone', { id: 'gone', synced: true });
+        const lb = makeLogbook();
+        await lb._fetchFromServer();
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(lb._deleteEntry.mock.calls.map(([id]) => id)).toEqual(['gone']);
+        expect(localStorage.getItem('flypi_logbook_seq')).toBe(String(2 + 2 * 1211));
+    });
+
+    it('a second call while a pull is running joins it: one set of requests, one reconciliation', async () => {
+        realShape();
+        store.set('gone', { id: 'gone', synced: true });
+        const lb = makeLogbook();
+        const a = lb._fetchFromServer();
+        const b = lb._fetchFromServer();
+        expect(b).toBe(a);
+        await Promise.all([a, b]);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(lb._deleteEntry).toHaveBeenCalledTimes(1);
+        // and once it has finished, a new call starts a new pull
+        await lb._fetchFromServer();
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+});

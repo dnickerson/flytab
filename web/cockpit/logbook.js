@@ -11,13 +11,13 @@ class Logbook {
     // web/shared/trip-store.js, which independently hardcodes these same
     // three literals and must stay in exact sync with any change here.
     static IDB_STORE = 'flypi_logbook';
+    static IDB_NAME = 'flypi-flights';
+    static IDB_VERSION = 5;
+    static IDB_ML_STORE = 'flypi_ml_logs';
     // Server pull: rows per request (the server returns at most 1,000 whatever is asked) and a
     // bound on requests per pull (50 x 1,000 rows) so a misbehaving server cannot loop it.
     static PULL_PAGE_SIZE = 1000;
     static PULL_MAX_PAGES = 50;
-    static IDB_NAME = 'flypi-flights';
-    static IDB_VERSION = 5;
-    static IDB_ML_STORE = 'flypi_ml_logs';
 
     /**
      * @param {NasrDB} nasrDb - NasrDB instance for airport lookups
@@ -1072,7 +1072,15 @@ class Logbook {
      * until a page comes back empty; the cursor is saved after each page. Local entries are only
      * removed on a full pull (cursor 0) that reached that empty page.
      */
-    async _fetchFromServer() {
+    _fetchFromServer() {
+        // One pull at a time: the open-time pull and syncWhenOnline (SYNC, auto-sync) both call
+        // this, and a pull is now several requests. A second call joins the pull in flight.
+        if (this._pullInFlight) return this._pullInFlight;
+        this._pullInFlight = this._pullFromServer().finally(() => { this._pullInFlight = null; });
+        return this._pullInFlight;
+    }
+
+    async _pullFromServer() {
         if (!navigator.onLine) return;
         const workerBase = Settings.workerBase;
         const startSince = Number(localStorage.getItem('flypi_logbook_seq') || 0);
@@ -1104,6 +1112,7 @@ class Logbook {
                         // Tombstone — remove from local IDB
                         if (localById.has(serverEntry.id)) {
                             await this._deleteEntry(serverEntry.id);
+                            localById.delete(serverEntry.id);
                             removed++;
                         }
                         continue;
@@ -1122,11 +1131,16 @@ class Logbook {
                         // Local has pending edits — push will handle conflict
                         continue;
                     }
+                    // localById follows every save/delete: a row saved on one page and tombstoned on a
+                    // later page of the same pull (deleted on another device meanwhile) must be found.
                     if (local) {
-                        await this._saveEntry({ ...local, ...serverEntry });
+                        const saved = { ...local, ...serverEntry };
+                        await this._saveEntry(saved);
+                        localById.set(saved.id, saved);
                         updated++;
                     } else {
                         await this._saveEntry(serverEntry);
+                        localById.set(serverEntry.id, serverEntry);
                         merged++;
                     }
                 }
