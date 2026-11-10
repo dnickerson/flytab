@@ -114,15 +114,17 @@ class FuelEngine {
      * Calculate fuel endurance from gallons and burn rate.
      * @param {number} gallons - Fuel quantity
      * @param {number} gph - Burn rate in gallons per hour
+     * Total minutes are rounded first and then split, so hours × 60 + minutes is
+     * always totalMin and minutes is 0-59 (119.6 min → 2:00, never 1:60).
      * @returns {{ hours: number, minutes: number, totalMin: number }}
      */
     static endurance(gallons, gph) {
         if (!gallons || !gph || gph <= 0) return { hours: 0, minutes: 0, totalMin: 0 };
-        const totalMin = (gallons / gph) * 60;
+        const totalMin = Math.round((gallons / gph) * 60);
         return {
             hours: Math.floor(totalMin / 60),
-            minutes: Math.round(totalMin % 60),
-            totalMin: Math.round(totalMin),
+            minutes: totalMin % 60,
+            totalMin,
         };
     }
 

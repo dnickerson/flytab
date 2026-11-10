@@ -156,6 +156,27 @@ describe('FuelEngine', () => {
             expect(r.totalMin).toBe(300);
         });
 
+        it('F3: a remainder that rounds to 60 min carries into the hour (2:00, not 1:60)', () => {
+            // 119.6 min: 1 h 59.6 min → rounds to 120 min
+            const r = FuelEngine.endurance(119.6 / 60 * 8, 8);
+            expect(r).toEqual({ hours: 2, minutes: 0, totalMin: 120 });
+        });
+
+        it('F3: 59.6 min total → 1:00', () => {
+            expect(FuelEngine.endurance(59.6 / 60 * 6, 6)).toEqual({ hours: 1, minutes: 0, totalMin: 60 });
+        });
+
+        it('F3: 119.4 min → 1:59; 29.5 s (0.49 min) → 0:00; hours × 60 + minutes is always totalMin', () => {
+            expect(FuelEngine.endurance(119.4 / 60 * 8, 8)).toEqual({ hours: 1, minutes: 59, totalMin: 119 });
+            expect(FuelEngine.endurance(0.49 / 60 * 8, 8)).toEqual({ hours: 0, minutes: 0, totalMin: 0 });
+            for (let g = 0.05; g < 40; g += 0.37) {
+                const r = FuelEngine.endurance(g, 7.3);
+                expect(r.minutes).toBeGreaterThanOrEqual(0);
+                expect(r.minutes).toBeLessThan(60);
+                expect(r.hours * 60 + r.minutes).toBe(r.totalMin);
+            }
+        });
+
         it('calculates correctly for 10 gal at 8 gph (75 min)', () => {
             const r = FuelEngine.endurance(10, 8);
             expect(r.hours).toBe(1);
