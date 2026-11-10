@@ -155,9 +155,7 @@ class PositionHealthPanel {
     static duration(s) {
         if (s < 90) return `${s} s`;
         if (s < 5400) return `${Math.round(s / 60)} min`;
-        // Round to whole minutes first: 7170 s showed as "1 h 60 min".
-        const totalMin = Math.round(s / 60);
-        return `${Math.floor(totalMin / 60)} h ${totalMin % 60} min`;
+        return FuelEngine.formatHm(s, 's', 'hMin');
     }
 
     destroy() {

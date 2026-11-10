@@ -13,6 +13,7 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 
+globalThis.FuelEngine     = new Function(read('web/shared/fuel-engine.js') + '\nreturn FuelEngine;')();
 const InstrumentStrip     = new Function(read('web/cockpit/instrument-strip.js') + '\nreturn InstrumentStrip;')();
 const PowerTradeoff       = new Function(read('web/cockpit/power-tradeoff.js') + '\nreturn PowerTradeoff;')();
 const PositionHealthPanel = new Function(read('web/cockpit/position-health-panel.js') + '\nreturn PositionHealthPanel;')();
@@ -32,6 +33,41 @@ function extractMethod(source, signature) {
 }
 const appSrc = read('web/app.js');
 const fmtEteHm = (min) => new Function('min', extractMethod(appSrc, 'static fmtEteHm(min) {'))(min);
+
+describe('FuelEngine.splitHm / formatHm: the one shared h:mm helper', () => {
+    it('splitHm rounds the total first, in minutes, hours or seconds', () => {
+        expect(FuelEngine.splitHm(119.6)).toEqual({ h: 2, m: 0, totalMin: 120 });
+        expect(FuelEngine.splitHm(119.4, 'min')).toEqual({ h: 1, m: 59, totalMin: 119 });
+        expect(FuelEngine.splitHm(1.995, 'hr')).toEqual({ h: 2, m: 0, totalMin: 120 });
+        expect(FuelEngine.splitHm(7170, 's')).toEqual({ h: 2, m: 0, totalMin: 120 });
+        expect(FuelEngine.splitHm(0)).toEqual({ h: 0, m: 0, totalMin: 0 });
+    });
+
+    it('formatHm styles', () => {
+        expect(FuelEngine.formatHm(75.2, 'min', 'colon')).toBe('1:15');
+        expect(FuelEngine.formatHm(5, 'min', 'colon')).toBe('0:05');
+        expect(FuelEngine.formatHm(75.2, 'min', 'colonOrM')).toBe('1:15');
+        expect(FuelEngine.formatHm(42.4, 'min', 'colonOrM')).toBe('42m');
+        expect(FuelEngine.formatHm(1.5, 'hr', 'hm')).toBe('1h 30m');
+        expect(FuelEngine.formatHm(0.1, 'hr', 'hm')).toBe('0h 06m');
+        expect(FuelEngine.formatHm(65, 'min', 'hThinM')).toBe('1h\u20095m');
+        expect(FuelEngine.formatHm(9, 'min', 'hThinM')).toBe('9m');
+        expect(FuelEngine.formatHm(5400, 's', 'hMin')).toBe('1 h 30 min');
+    });
+
+    it('every h:mm formatter goes through it (no private split left)', () => {
+        for (const [p, re] of [
+            ['web/cockpit/instrument-strip.js', /FuelEngine\.formatHm\(minutes, 'min', 'colonOrM'\)/],
+            ['web/cockpit/power-tradeoff.js', /FuelEngine\.formatHm\(minutes, 'min', 'colonOrM'\)/],
+            ['web/cockpit/route-table.js', /FuelEngine\.formatHm\(minutes, 'min', 'colonOrM'\)/],
+            ['web/cockpit/position-health-panel.js', /FuelEngine\.formatHm\(s, 's', 'hMin'\)/],
+            ['web/app.js', /FuelEngine\.formatHm\(min, 'min', 'hThinM'\)/],
+            ['web/cockpit/route-planner-panel.js', /FuelEngine\.formatHm\(hrs, 'hr'/],
+            ['web/cockpit/engine-page.js', /FuelEngine\.formatHm\(gallonsRem \/ fuelFlow, 'hr', 'colon'\)/],
+            ['web/cockpit/engine-panel.js', /FuelEngine\.formatHm\(meas\.gallons \/ gph, 'hr', 'colon'\)/],
+        ]) expect(read(p)).toMatch(re);
+    });
+});
 
 describe('h:mm formatters never show 60 minutes', () => {
     it('InstrumentStrip._formatEte (ETE)', () => {

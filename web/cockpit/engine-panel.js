@@ -212,10 +212,7 @@ class EnginePanel {
         if (this._dom.gph) this._dom.gph.textContent = gph.toFixed(1);
         let endur = '';
         if (meas && gph > 0 && meas.gallons > 0) {
-            const totalMin = Math.round((meas.gallons / gph) * 60);
-            const h = Math.floor(totalMin / 60);
-            const m = totalMin % 60;
-            endur = `${h}:${String(m).padStart(2, '0')}${q} endur`;
+            endur = `${FuelEngine.formatHm(meas.gallons / gph, 'hr', 'colon')}${q} endur`;
         }
         if (this._dom.fuelEndurance) this._dom.fuelEndurance.textContent = endur;
 

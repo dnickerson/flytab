@@ -2959,6 +2959,13 @@ class RoutePlannerPanel {
 
     // ── REV ───────────────────────────────────────────────────────────────────
 
+    /** Hours → "H:MM" (style 'colon') or "Hh MMm" (style 'hm'), via FuelEngine.formatHm
+     *  (total minutes rounded first: 1.995 h is "2:00" / "2h 00m", never "1:60").
+     *  @param {number} hrs  @param {'colon'|'hm'} style */
+    static fmtHrs(hrs, style) {
+        return FuelEngine.formatHm(hrs, 'hr', style === 'hm' ? 'hm' : 'colon');
+    }
+
     /**
      * The route reversed, as new pills (`route` is not modified), or null with
      * fewer than two points. Dropped: everything after the dest pill (missed
@@ -2970,20 +2977,6 @@ class RoutePlannerPanel {
      * with it, as _loadPlan tags them. Fuel stops and pilot altitudes stay on
      * their waypoint.
      */
-    /**
-     * Hours → "H:MM" (style 'colon') or "Hh MMm" (style 'hm'). The total minutes are
-     * rounded first, so 1.995 h is "2:00" / "2h 00m" (splitting the hours with
-     * floor/round showed "1:60" / "1h 60m").
-     * @param {number} hrs
-     * @param {'colon'|'hm'} style
-     */
-    static fmtHrs(hrs, style) {
-        const total = Math.round(hrs * 60);
-        const h = Math.floor(total / 60);
-        const m = String(total % 60).padStart(2, '0');
-        return style === 'hm' ? `${h}h ${m}m` : `${h}:${m}`;
-    }
-
     static reversePills(route) {
         let destIdx = -1;
         for (let i = route.length - 1; i >= 0; i--) if (route[i].type === 'dest') { destIdx = i; break; }

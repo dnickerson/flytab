@@ -280,10 +280,6 @@ class PowerTradeoff {
 
     static _fmtTime(minutes) {
         if (minutes == null || minutes < 0) return '—';
-        // Round the total first: floor/round on the parts showed 119.6 min as "1:60".
-        const total = Math.round(minutes);
-        const h = Math.floor(total / 60);
-        const m = total % 60;
-        return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}m`;
+        return FuelEngine.formatHm(minutes, 'min', 'colonOrM');
     }
 }

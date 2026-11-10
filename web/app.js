@@ -2604,10 +2604,7 @@ class FlyTabApp {
      *  first, so 119.6 min is "2h 0m" (floor/round on the parts showed "1h 60m"). */
     static fmtEteHm(min) {
         if (min == null) return '\u2014';
-        const total = Math.round(min);
-        const h = Math.floor(total / 60);
-        const m = total % 60;
-        return h > 0 ? `${h}h\u2009${m}m` : `${m}m`;
+        return FuelEngine.formatHm(min, 'min', 'hThinM');
     }
 
     /** One AppHealth renderer event, for the diagnostic log. */

@@ -3851,13 +3851,9 @@ class RouteTable {
         return RouteTable._formatEte(minutes);
     }
 
-    /** Minutes → "H:MM", or "Mm" under an hour. The total is rounded first, so
-     *  119.6 min is "2:00" (splitting with floor/round showed "1:60"). */
+    /** Minutes → "H:MM", or "Mm" under an hour (FuelEngine.formatHm). */
     static _formatEte(minutes) {
-        const total = Math.round(minutes);
-        const h = Math.floor(total / 60);
-        const m = total % 60;
-        return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}m`;
+        return FuelEngine.formatHm(minutes, 'min', 'colonOrM');
     }
 
     /** Format altitude for a segment: "486→8,500" for CLB/DES, "8,500" for level */
