@@ -39,7 +39,7 @@ const EnginePage = new Function(read('web/cockpit/engine-page.js') + '\nreturn E
 
 // engine-page.js references the bare identifier EngineClient.MIN_PI_CONTRACT —
 // only the static constant is needed here, not the full WebSocket client.
-globalThis.EngineClient = { MIN_PI_CONTRACT: 2 };
+globalThis.EngineClient = { MIN_PI_CONTRACT: 3 };
 
 let page = null;
 
@@ -98,7 +98,7 @@ describe('EnginePage — Pi contract banner', () => {
         page.update(FRAME_OLD_CONTRACT);
         const b = banner();
         expect(b.shown).toBe(true);
-        expect(b.required).toBe('2');
+        expect(b.required).toBe('3');
         expect(b.piContract).toBe('1');
         expect(b.piVersion).toBe('3.4.0');
         expect(b.text).toContain('deploy-pi.sh');

@@ -36,14 +36,23 @@ class FuelEngine {
 
     /**
      * Create a fuel measurement from left and right tank tic marks.
-     * Optionally compares against an EDM (engine data monitor) reading.
+     *
+     * Two call forms:
+     *  - 4 arguments (legacy): `edmReading` is both stored as edm_gal and the figure
+     *    the tic is graded against (when > 0).
+     *  - 5 arguments: `referenceGal` is the grading figure (e.g. the tablet's tracked
+     *    fuel) and `edmReading` is only stored, as edm_gal (null when absent or ≤ 0).
+     *    Passing `referenceGal` explicitly (even null) selects this form.
+     * Grading (variance_gal, variance_pct, accuracy) happens only against a figure > 0.
      * @param {number} leftTic - Left tank tic mark reading
      * @param {number} rightTic - Right tank tic mark reading
      * @param {object} coefficients - Polynomial coefficients
-     * @param {number|null} edmReading - EDM total fuel reading in gallons (optional)
+     * @param {number|null} edmReading - the D-180 EMS fuel figure in gallons (optional)
+     * @param {number|null} [referenceGal] - figure to grade the tic against (optional)
      * @returns {object} Measurement with gallons per tank, total, variance
      */
-    static createMeasurement(leftTic, rightTic, coefficients = FuelEngine.DEFAULT_COEFFICIENTS, edmReading = null) {
+    static createMeasurement(leftTic, rightTic, coefficients = FuelEngine.DEFAULT_COEFFICIENTS,
+                             edmReading = null, referenceGal = undefined) {
         const leftGal = FuelEngine.ticToGallons(leftTic, coefficients);
         const rightGal = FuelEngine.ticToGallons(rightTic, coefficients);
         const totalGal = leftGal + rightGal;
@@ -58,10 +67,17 @@ class FuelEngine {
             total_gal: Math.round(totalGal * 10) / 10,
         };
 
-        if (edmReading != null && edmReading > 0) {
+        const separate = referenceGal !== undefined;
+        const ref = separate ? referenceGal : edmReading;
+        if (separate) {
+            measurement.edm_gal = (edmReading != null && edmReading > 0) ? edmReading : null;
+        } else if (edmReading != null && edmReading > 0) {
             measurement.edm_gal = edmReading;
-            measurement.variance_gal = Math.round((totalGal - edmReading) * 10) / 10;
-            measurement.variance_pct = Math.round(Math.abs(totalGal - edmReading) / edmReading * 1000) / 10;
+        }
+
+        if (ref != null && ref > 0) {
+            measurement.variance_gal = Math.round((totalGal - ref) * 10) / 10;
+            measurement.variance_pct = Math.round(Math.abs(totalGal - ref) / ref * 1000) / 10;
             measurement.accuracy = FuelEngine.getAccuracyGrade(measurement.variance_pct);
         }
 
@@ -80,21 +96,18 @@ class FuelEngine {
     }
 
     /**
-     * Extract EDM fuel remaining from engine data (normalizes field name variants).
+     * Extract the Dynon D-180 EMS's own fuel-remaining figure (EMS serial field 12,
+     * forwarded by the Pi as data.Fuel_Remaining). This is an instrument reading.
+     * The Pi's own tracker (data.fuel.*) is deliberately NOT read: fuel on board is
+     * tracked on the tablet (FuelTankState). Fuel_Remaining is the only name the Pi
+     * emits (engine_monitor.py parse); the old aliases were never sent by it.
      * @param {object} data - Engine poll data
      * @returns {number} Fuel remaining in gallons (0 if unavailable)
      */
     static extractEdmFuel(data) {
         if (!data) return 0;
-        // data.fuel.fuel_remaining = Pi integrated tracker (primary source)
-        // data.Fuel_Remaining = EDM resistive sender (0 unless aircraft has tank senders)
-        return data.fuel?.fuel_remaining
-            ?? data.fuel_remaining_gal
-            ?? data.fuel_gal
-            ?? data.gallons_rem
-            ?? data.Gallons_Rem
-            ?? data.Fuel_Remaining
-            ?? 0;
+        const v = Number(data.Fuel_Remaining);
+        return Number.isFinite(v) ? v : 0;
     }
 
     /**

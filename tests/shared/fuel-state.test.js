@@ -106,3 +106,53 @@ describe('FuelState capacity fallback', () => {
         expect(FuelState.getCurrentFuel().gallons).toBe(36);
     });
 });
+
+describe('FuelState — single fuel source chain', () => {
+    it('getStartFuel no longer exists', () => {
+        const FuelState = freshFuelState();
+        expect(FuelState.getStartFuel).toBeUndefined();
+    });
+
+    it('a Pi fuel figure never becomes the fuel on board', () => {
+        const FuelState = freshFuelState({ tankState: { left_gal: 15.6, right_gal: 18.0 } });
+        global.window.enginePanel = { lastData: { fuel: { fuel_remaining: 16.9 } }, lastPollTime: Date.now() };
+        try {
+            const cur = FuelState.getCurrentFuel();
+            expect(cur.gallons).toBeCloseTo(33.6, 5);
+            expect(cur.source).toBe('tank_state');
+        } finally {
+            delete global.window.enginePanel;
+        }
+    });
+});
+
+describe('FuelState.measuredGallons() — the one "is this a measurement?" read (PR #214 finding 2)', () => {
+    it('tracked figure: { gallons, stale:false }', () => {
+        const FuelState = freshFuelState({ tankState: { left_gal: 8.5, right_gal: 7.2 } });
+        const m = FuelState.measuredGallons();
+        expect(m.gallons).toBeCloseTo(15.7, 5);
+        expect(m.stale).toBe(false);
+    });
+
+    it('stale tracked figure: stale true (the caller decides what to show)', () => {
+        const FuelState = freshFuelState({ tankState: { left_gal: 8, right_gal: 8 }, needsConfirmation: true });
+        expect(FuelState.measuredGallons()).toEqual({ gallons: 16, stale: true });
+    });
+
+    it('manual override: { gallons, stale:false }', () => {
+        const FuelState = freshFuelState({ manualOverride: 22 });
+        expect(FuelState.measuredGallons()).toEqual({ gallons: 22, stale: false });
+    });
+
+    it('capacity default: null (not a measurement)', () => {
+        const FuelState = freshFuelState();
+        expect(FuelState.measuredGallons()).toBeNull();
+    });
+
+    it('a throwing / non-finite read: null', () => {
+        const FuelState = freshFuelState({ tankState: { left_gal: NaN, right_gal: 1 } });
+        expect(FuelState.measuredGallons()).toBeNull();
+        FuelState.getCurrentFuel = () => { throw new Error('boom'); };
+        expect(FuelState.measuredGallons()).toBeNull();
+    });
+});

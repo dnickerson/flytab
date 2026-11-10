@@ -26,7 +26,7 @@ test.describe('engine panel @engine', () => {
         }
     });
 
-    test('renders fuel endurance from Gallons_Rem and Fuel_Flow', async ({ page }) => {
+    test('renders fuel endurance from the tablet fuel (FuelState) and Fuel_Flow', async ({ page }) => {
         await page.goto(HARNESS);
         await page.evaluate(frame => window.__harness.sendData(frame), ENGINE_FRAME);
         // 24.9 gal / 8.5 gph * 60 = 175.9 → rounded 176 min → 2:56 endur

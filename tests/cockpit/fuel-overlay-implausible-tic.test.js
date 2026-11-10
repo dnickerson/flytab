@@ -93,20 +93,19 @@ describe('FuelOverlay implausible tic-mark guard', () => {
         expect(overlay._dom.applyStatus.textContent).not.toMatch(/more than it can hold/i);
     });
 
-    it('re-validates the cap at write time — an edit made during the async EDM resolve cannot bypass the guard', async () => {
-        // A plausible reading passes the tap-time guard and starts the async chain
-        // (_resolveEdmFuel(), which the code's own comment notes "can take 3-5s").
+    it('writes in the same tick as the guard — there is no wait in which the reading can change', () => {
+        // APPLY used to wait on a flight-CSV lookup between the cap check and the
+        // write, so a slider edit made meanwhile needed a second check. It is now
+        // synchronous: the value checked is the value written, before tap() returns.
         drag(overlay._dom.leftSlider, 8);
+        drag(overlay._dom.rightSlider, 8);
         tap('fo-apply');
 
-        // Before that promise settles, the pilot edits the slider to an implausible
-        // value — nothing disables the sliders during the wait.
-        drag(overlay._dom.leftSlider, 17);
-        await new Promise(r => setTimeout(r, 20));
-
-        expect(overlay._dom.applyStatus.textContent).toMatch(/more than it can hold/i);
-        expect(overlay._dom.applyStatus.className).toContain('fo-add-status-error');
-        expect(overlay.visible).toBe(true); // refused, not hidden
-        expect(FuelTankState.getState()).toBe(null); // nothing written
+        const written = FuelTankState.getState();
+        expect(written).not.toBe(null);
+        expect(overlay.visible).toBe(false);
+        const expected = FuelEngine.createMeasurement(8, 8, overlay._coefficients);
+        expect(written.left_gal).toBeCloseTo(expected.left_gal, 5);
+        expect(written.right_gal).toBeCloseTo(expected.right_gal, 5);
     });
 });

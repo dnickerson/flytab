@@ -657,10 +657,24 @@ class FlightRecorder {
         const mlAnomaly = ml?.anomaly != null ? (ml.anomaly ? 1 : 0) : '';
         const mlLatency = ml?.latencyMs != null ? Math.round(ml.latencyMs) : '';
 
+        // Gallons Remaining = the tablet's tracked total (or the pilot's manual figure),
+        // via FuelState.measuredGallons(). Empty when only the capacity default is
+        // known, or when the tracked figure is stale (UNCONFIRMED: it reads high):
+        // neither is a measurement.
+        let tabletFuelGal = '';
+        try {
+            const f = (typeof FuelState !== 'undefined' && typeof FuelState.measuredGallons === 'function')
+                ? FuelState.measuredGallons() : null;
+            if (f && !f.stale) {
+                // 0.1 gal, written as a plain number like the old Pi column ('21.4', '15').
+                tabletFuelGal = Math.round(f.gallons * 10) / 10;
+            }
+        } catch (_) { /* leave the cell empty */ }
+
         const row = [
             time12, d.MP||0, d.Oil_Temp||0, d.Oil_Press||0,
             d.Fuel_Press||0, d.Volts||0, d.Amps||0,
-            rpm, d.Fuel_Flow||0, (eng?.fuel?.fuel_remaining ?? d.Fuel_Remaining ?? 0),
+            rpm, d.Fuel_Flow||0, tabletFuelGal,
             d.Fuel_Left||0, d.Fuel_Right||0, d.Carb_Temp||0,
             d.GP2||'', d.GP3||'', d.Thermo||0,
             d.EGT1||0, d.EGT2||0, d.EGT3||0, d.EGT4||0,

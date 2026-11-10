@@ -5,9 +5,8 @@
  *  1. REMAINING / ENDURANCE / RANGE come from the canonical live fuel read
  *     (FuelState.getCurrentFuel) rather than whatever raw EDM field happens to
  *     be populated on the engine poll payload.
- *  2. USED (FLIGHT) reads the Pi fuel tracker's nested field (`data.fuel.flight_fuel_used`),
- *     which is where engine_monitor.get_status() actually puts it — there is no
- *     top-level `flight_fuel_used`.
+ *  2. USED reads FuelTankState.burned_since_init_gal (gallons since the last tic
+ *     measurement / fuel stop), never the Pi tracker's `data.fuel.flight_fuel_used`.
  *  3. The fuel-bar caution/warning colouring honours the real cockpit-config schema
  *     keys (`enginePage.fuelCautionGal` / `fuelWarningGal`).
  *
@@ -212,6 +211,23 @@ describe('EnginePage FUEL STATUS — stale tracked state is marked, not silently
         expect(out.remClass).toBe('ep-gauge-value');
     });
 
+    it('flow lost while the engine ran (PR #214 finding 1): banner shown at once, says engine data was lost', () => {
+        setup({ tankL: 9, tankR: 9 });
+        FuelTankState._state.last_burn_at = new Date().toISOString();
+        expect(FuelTankState.markFlowLost(Date.now(), 9, 2400)).toBe(true);
+        const out = fuelFields(engine);
+        expect(out.remaining).toBe('18.0');
+        expect(out.staleShown).toBe(true);
+        expect(page._dom.fuelStale.textContent).toMatch(/ENGINE DATA LOST/);
+        expect(page._dom.fuelStale.textContent).toMatch(/REMAINING MAY READ HIGH/);
+    });
+
+    it('the 45-min case keeps its own wording', () => {
+        setup({ tankL: 9, tankR: 9, staleMinutes: 60 });
+        fuelFields(engine);
+        expect(page._dom.fuelStale.textContent).toMatch(/NOT UPDATED IN 45\+ MIN/);
+    });
+
     it('shows no unconfirmed marking for a manual override', () => {
         // A manual override is not a tracked-and-aged figure; it is what the pilot
         // just typed in. Staleness is a FuelTankState property only.
@@ -275,17 +291,30 @@ describe('EnginePage FUEL STATUS — capacity comes from aircraft-config, not a 
     });
 });
 
-describe('EnginePage FUEL STATUS — USED (FLIGHT)', () => {
-    it('reads the Pi fuel tracker nested field', () => {
+describe('EnginePage FUEL STATUS — USED', () => {
+    it('USED shows burned_since_init_gal, not data.fuel.flight_fuel_used', () => {
         setup({ tankL: 10, tankR: 8 });
+        FuelTankState._state.burned_since_init_gal = 2.34;
         const out = fuelFields({ fuel: { flight_fuel_used: 4.3 }, fuel_flow: 0 });
-        expect(out.used).toBe('4.3');
+        expect(out.used).toBe('2.3');
+        expect(page._el.querySelector('#ep-fuel-used').closest('.ep-gauge')
+            .querySelector('.ep-gauge-label').textContent).toBe('USED');
     });
 
-    it('falls back to the placeholder when the tracker block is absent', () => {
+    it('reads 0.0 right after a tic measurement (nothing burned yet)', () => {
         setup({ tankL: 10, tankR: 8 });
-        const out = fuelFields({ fuel_flow: 0 });
-        expect(out.used).toBe('--.-');
+        expect(fuelFields({ fuel_flow: 0 }).used).toBe('0.0');
+    });
+
+    it('state stored without the counter shows an em dash, not 0', () => {
+        setup({ tankL: 10, tankR: 8 });
+        delete FuelTankState._state.burned_since_init_gal;
+        expect(fuelFields({ fuel: { flight_fuel_used: 4.3 }, fuel_flow: 0 }).used).toBe('\u2014');
+    });
+
+    it('falls back to the placeholder when nothing is tracked', () => {
+        setup({ tankL: null });
+        expect(fuelFields({ fuel: { flight_fuel_used: 4.3 }, fuel_flow: 0 }).used).toBe('--.-');
     });
 });
 
@@ -340,19 +369,97 @@ describe('EnginePage FUEL STATUS — configured caution/warning thresholds', () 
     });
 });
 
-describe('EnginePage TIC vs EDM row — still compares against the EDM, not tank state', () => {
-    it('shows the EDM totalizer figure in the EDM column', () => {
-        // Tank state is 18.0; the EDM reports 30.0. The row exists to expose that
-        // disagreement, so it must keep reading the EDM value.
+describe('EnginePage TRACKED vs D-180 row (PR #214 finding 6)', () => {
+    // Live tracked fuel (FuelTankState left + right) against the D-180's own fuel
+    // computer (Fuel_Remaining, current frame only). The saved departure tic is no
+    // longer compared: it drifts further from both with every gallon burned.
+    const row = () => page._dom.ticEdmRow;
+    const txt = (id) => page._el.querySelector('#' + id).textContent;
+
+    it('is labelled TRACKED vs D-180 and compares the live tracked total, not the saved tic', () => {
         setup({ tankL: 10, tankR: 8, measurement: { total_gal: 29.0 } });
         const out = fuelFields({ Fuel_Remaining: 30, fuel_flow: 0 });
+        expect(row().querySelector('.ep-tic-edm-label').textContent).toBe('TRACKED vs D-180');
         expect(out.ticRowShown).toBe(true);
+        expect(txt('ep-trk-total')).toBe('18.0');
+        expect(out.edmTotal).toBe('30.0');
+        expect(txt('ep-tic-var')).toBe('-12.0');
+        expect(txt('ep-tic-grade')).toBe('CHECK');
+        expect(row().textContent).not.toMatch(/TIC|EDM|29\.0/);
+        expect(page._el.querySelector('#ep-trk-unconf').style.display).toBe('none');
+    });
+
+    it('follows the tracker live (no saved measurement needed)', () => {
+        setup({ tankL: 10, tankR: 8 });
+        fuelFields({ Fuel_Remaining: 18.5, fuel_flow: 0 });
+        expect(txt('ep-trk-total')).toBe('18.0');
+        expect(txt('ep-tic-var')).toBe('-0.5');
+        expect(txt('ep-tic-grade')).toBe('EXCELLENT');
+        FuelTankState.init(6, 6, 'L');
+        fuelFields({ Fuel_Remaining: 18.5, fuel_flow: 0 });
+        expect(txt('ep-trk-total')).toBe('12.0');
+    });
+
+    it('marks a stale tracked figure UNCONFIRMED', () => {
+        setup({ tankL: 10, tankR: 8, staleMinutes: 50 });
+        fuelFields({ Fuel_Remaining: 30, fuel_flow: 0 });
+        expect(txt('ep-trk-total')).toBe('18.0?');
+        expect(page._el.querySelector('#ep-trk-unconf').style.display).toBe('');
+        expect(txt('ep-trk-unconf')).toBe('UNCONFIRMED');
+    });
+
+    it('hidden with no tank state (a manual override is not tracked fuel)', () => {
+        setup({ manual: 20, measurement: { total_gal: 29.0 } });
+        expect(fuelFields({ Fuel_Remaining: 30, fuel_flow: 0 }).ticRowShown).toBe(false);
+    });
+
+    it('hidden when the D-180 has no figure (0 / absent / only aliases)', () => {
+        setup({ tankL: 10, tankR: 8 });
+        expect(fuelFields({ Fuel_Remaining: 0, fuel_flow: 0 }).ticRowShown).toBe(false);
+        expect(fuelFields({ Gallons_Rem: 50, fuel_remaining: 50, fuel_flow: 0 }).ticRowShown).toBe(false);
+    });
+
+    it('reads the D-180 figure from Fuel_Remaining only', () => {
+        setup({ tankL: 10, tankR: 8 });
+        const out = fuelFields({ gallons_rem: 50, Gallons_Rem: 50, fuel_remaining_gal: 50, Fuel_Remaining: 30, fuel_flow: 0 });
         expect(out.edmTotal).toBe('30.0');
     });
 
-    it('hides the row when the EDM reports no fuel figure', () => {
-        setup({ tankL: 10, tankR: 8, measurement: { total_gal: 29.0 } });
-        const out = fuelFields({ Fuel_Remaining: 0, fuel_flow: 0 });
-        expect(out.ticRowShown).toBe(false);
+    it('re-review M2: hidden after a full Pi disconnect / no fresh frames (same signal as the stale styling)', () => {
+        // _updateDataAge (the stale styling) reads EngineClient.edmCurrent, as in the app.
+        globalThis.EngineClient = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
+        setup({ tankL: 10, tankR: 8 });
+        const frame = { Fuel_Remaining: 30, fuel_flow: 0 };
+        window.enginePanel = { lastData: frame, lastPollTime: Date.now() };
+        page._tick();
+        expect(page._dom.ticEdmRow.style.display).toBe('flex');
+        window.enginePanel = { lastData: frame, lastPollTime: 0 };          // disconnect
+        page._tick();
+        expect(page._dom.ticEdmRow.style.display).toBe('none');
+        window.enginePanel = { lastData: frame, lastPollTime: Date.now() - 8000 };   // stale
+        page._tick();
+        expect(page._dom.ticEdmRow.style.display).toBe('none');
+        window.enginePanel = { lastData: frame, lastPollTime: Date.now() };
+        page._tick();
+        expect(page._dom.ticEdmRow.style.display).toBe('flex');
+        delete window.enginePanel;
+        delete globalThis.EngineClient;
+    });
+
+    it('re-review M3: the UNCONFIRMED tag uses a font-size token, not raw px', () => {
+        const m = read('web/style.css').match(/\n\.ep-trk-unconf\s*\{([^}]*)\}/);
+        expect(m).not.toBeNull();
+        expect(m[1]).toMatch(/font-size:\s*var\(--text-/);
+        expect(m[1]).not.toMatch(/font-size:\s*\d+px/);
+    });
+
+    it('hidden on a frozen frame (EngineClient.edmCurrent false)', () => {
+        globalThis.EngineClient = new Function(read('web/shared/engine-client.js') + '\nreturn EngineClient;')();
+        try {
+            setup({ tankL: 10, tankR: 8 });
+            expect(fuelFields({ Fuel_Remaining: 30, fuel_flow: 0, serial_warning: 'No EDM data for 6s' }).ticRowShown).toBe(false);
+            expect(fuelFields({ Fuel_Remaining: 30, fuel_flow: 0, serial_connected: false }).ticRowShown).toBe(false);
+            expect(fuelFields({ Fuel_Remaining: 30, fuel_flow: 0, serial_connected: true }).ticRowShown).toBe(true);
+        } finally { delete globalThis.EngineClient; }
     });
 });

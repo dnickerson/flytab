@@ -44,6 +44,9 @@ const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 // exact class of global-scope bug that broke this file once already —
 // see tests/shared/phase-detector-browser-load.test.js).
 const EngineMLBridge = new Function(read('web/cockpit/engine-ml.js') + '\nreturn EngineMLBridge;')();
+// Real FuelState (its measuredGallons() is what engine-ml reads) with the fuel read stubbed.
+const RealFuelState = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
+const setFuel = (f) => { RealFuelState.getCurrentFuel = () => f; globalThis.FuelState = RealFuelState; };
 
 let processSampleSpy;
 let classifySpy;
@@ -80,6 +83,7 @@ beforeEach(() => {
 afterEach(() => {
     delete globalThis.window.Capacitor;
     delete globalThis.DiagLog;
+    delete globalThis.FuelState;
     vi.restoreAllMocks();
 });
 
@@ -143,7 +147,7 @@ describe('EngineMLBridge — payload field-name contract', () => {
     //   oil_temp        <- Oil_Temp      (real; 3rd alias)
     //   oil_press       <- Oil_Press     (real; 3rd alias)
     //   carb_temp       <- Carb_Temp     (real; 2nd alias)
-    //   fuel_remaining  <- Gallons_Rem   (real; 3rd alias)
+    //   fuel_remaining  <- FuelState.getCurrentFuel() (tablet; the Pi tracker is not read)
     // None of these were broken when this test was added — they're asserted
     // here so a future edit to any of these fallback chains (or a Pi-side
     // rename) fails immediately instead of waiting for a flight to surface it.
@@ -162,13 +166,38 @@ describe('EngineMLBridge — payload field-name contract', () => {
         }));
     });
 
-    it('reads oil temp/pressure, carb temp, and fuel remaining from their real fields', async () => {
+    it('reads oil temp/pressure and carb temp from their real fields; fuel remaining from the tablet (FuelState)', async () => {
+        setFuel({ gallons: 24.9, source: 'tank_state', stale: false });
         await bridge._onEngineData(ENGINE_FRAME);
         expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({
             oil_temp: 180.0,       // Oil_Temp
             oil_press: 76.0,       // Oil_Press
             carb_temp: 45.0,       // Carb_Temp
-            fuel_remaining: 24.9,  // Gallons_Rem
+            fuel_remaining: 24.9,  // FuelState.getCurrentFuel() (tablet), not Gallons_Rem
         }));
+    });
+
+    it('sends 0 fuel_remaining when only the capacity default is known (not a measurement)', async () => {
+        setFuel({ gallons: 36, source: 'capacity', stale: false });
+        await bridge._onEngineData({ ...ENGINE_FRAME, fuel: { fuel_remaining: 30 } });
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 0 }));
+    });
+
+    it('sends 0 fuel_remaining for a stale (UNCONFIRMED) tracked figure, never the high number', async () => {
+        setFuel({ gallons: 24.9, source: 'tank_state', stale: true });
+        await bridge._onEngineData(ENGINE_FRAME);
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 0 }));
+    });
+
+    it('reads fuel through FuelState.measuredGallons() (one helper, no private copy)', () => {
+        const src = read('web/cockpit/engine-ml.js');
+        expect(src).toMatch(/FuelState\.measuredGallons\(\)/);
+        expect(src).not.toMatch(/_tabletFuelGal/);
+    });
+
+    it('ignores the Pi tracker data.fuel.fuel_remaining', async () => {
+        setFuel({ gallons: 11, source: 'manual', stale: false });
+        await bridge._onEngineData({ ...ENGINE_FRAME, fuel: { fuel_remaining: 30 } });
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 11 }));
     });
 });

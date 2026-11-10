@@ -11,11 +11,19 @@ class FuelTanksDisplay {
         this._el = null;
         this._dom = {};
         this._onEngineData = null;
+        this._onEngineGone = null;
+        this._onEngineStale = null;
         this._onStateChanged = null;
         this._onConfirmPrompt = null;
         this._confirmTimer = null;
         this._timerInterval = null;
         this._lastGph = 0;
+        // GPH of the last CURRENT engine frame this session; null until one arrives.
+        // Tells FuelTankState.markFlowLost() whether the engine was running when
+        // flow data stopped or froze.
+        this._lastCurrentGph = null;
+        this._lastCurrentRpm = 0;      // RPM of that frame (markFlowLost needs > 300)
+        this._revealUntil = 0;         // revealTankControl(): badge taps never open the quantity dialog until then
         this._initPanelMode = null;   // 'preflight' | 'recovery' | null (panel closed)
         this._initPanelDirty = false;  // set to true while user is editing, prevents live updates from clobbering
         this._tankCapacity = 18;   // per side, updated from config on init
@@ -35,8 +43,16 @@ class FuelTanksDisplay {
         this._buildDOM();
 
         this._onEngineData = (e) => this._handleEngineData(e.detail);
+        // No frames at all (Pi off, WiFi lost): EngineClient fires engine:stale
+        // {stale: true} after 5 s without data, or engine:disconnect. Flow is then
+        // unknown, so GPH and endurance take the "no flow" rendering ('--') instead
+        // of holding the last reading. The next engine:data frame restores them.
+        this._onEngineGone = () => this._clearFlow();
+        this._onEngineStale = (e) => { if (e?.detail?.stale) this._clearFlow(); };
         if (window.engineClient) {
             window.engineClient.addEventListener('engine:data', this._onEngineData);
+            window.engineClient.addEventListener('engine:stale', this._onEngineStale);
+            window.engineClient.addEventListener('engine:disconnect', this._onEngineGone);
         }
 
         this._onStateChanged = () => { this._render(); this._refreshOpenPanel(); };
@@ -70,18 +86,86 @@ class FuelTanksDisplay {
         this._render();
     }
 
+    /**
+     * Checklist "FlyTab Tank" → SET: show the widget (even if hidden in the layer
+     * panel), highlight the L / R badges and enter reveal mode for REVEAL_MS. In
+     * reveal mode a badge tap only confirms or switches the tank
+     * (_onBadgeTapReveal); it never opens the PREFLIGHT FUEL quantity dialog,
+     * whose SET would re-initialise the quantities from an old tic.
+     */
+    revealTankControl() {
+        this.show();
+        this._revealUntil = Date.now() + FuelTanksDisplay.REVEAL_MS;
+        this._setRevealStatus('');
+        const badges = [this._dom.badgeL, this._dom.badgeR].filter(Boolean);
+        badges.forEach(b => b.classList.add('ftw-badge-attn'));
+        if (this._attnTimer) clearTimeout(this._attnTimer);
+        this._attnTimer = setTimeout(() => {
+            badges.forEach(b => b.classList.remove('ftw-badge-attn'));
+            this._setRevealStatus('');
+            this._attnTimer = null;
+        }, FuelTanksDisplay.REVEAL_MS);
+    }
+
+    _inRevealMode() { return Date.now() < this._revealUntil; }
+
+    _setRevealStatus(msg) {
+        const el = this._dom.revealStatus;
+        if (!el) return;
+        el.textContent = msg;
+        el.style.display = msg ? '' : 'none';
+    }
+
+    /**
+     * Badge tap in reveal mode (checklist FlyTab Tank → SET). Never opens the
+     * quantity dialog:
+     *  - no tank state, or requires_confirm (45+ min without a sample): nothing is
+     *    changed; the status line says to apply a tic on the FUEL screen.
+     *  - the already-active badge: confirmed in place ("LEFT already set"). Status
+     *    only — markConfirmed() is NOT called: it would clear requires_confirm (a
+     *    quantity confirmation) and reset last_sample_at, which drops the burn since
+     *    the last sample; with requires_confirm false it does nothing else.
+     *  - the other badge: FuelTankState.switchTank, checked by reading the state back.
+     */
+    _onBadgeTapReveal(tank) {
+        const name = (t) => (t === 'R' ? 'RIGHT' : 'LEFT');
+        const state = FuelTankState.getState();
+        if (!state) {
+            this._setRevealStatus('No fuel entered — apply a tic on the FUEL screen (MORE → Fuel Entry)');
+            return;
+        }
+        if (state.requires_confirm) {
+            this._setRevealStatus('Tank state not confirmed — apply a tic on the FUEL screen (MORE → Fuel Entry)');
+            return;
+        }
+        if (state.active_tank === tank) {
+            this._setRevealStatus(`${name(tank)} already set`);
+            return;
+        }
+        FuelTankState.switchTank(tank);
+        const after = FuelTankState.getState();
+        if (after && after.active_tank === tank) {
+            this._setRevealStatus(`Switched to ${name(tank)}`);
+        } else {
+            this._setRevealStatus(`Could not switch to ${name(tank)} — apply a tic on the FUEL screen (MORE → Fuel Entry)`);
+        }
+    }
+
     show() { if (this._el) { this._el.style.display = ''; try { localStorage.setItem('flypi_fuel_widget_visible', 'true');  } catch {} } }
     hide() { if (this._el) { this._el.style.display = 'none'; try { localStorage.setItem('flypi_fuel_widget_visible', 'false'); } catch {} } }
 
     destroy() {
-        if (this._onEngineData && window.engineClient) {
-            window.engineClient.removeEventListener('engine:data', this._onEngineData);
+        if (window.engineClient) {
+            if (this._onEngineData) window.engineClient.removeEventListener('engine:data', this._onEngineData);
+            if (this._onEngineStale) window.engineClient.removeEventListener('engine:stale', this._onEngineStale);
+            if (this._onEngineGone) window.engineClient.removeEventListener('engine:disconnect', this._onEngineGone);
         }
         if (this._onStateChanged) window.removeEventListener('fueltankstate:changed', this._onStateChanged);
         if (this._onFuelStateChanged) window.removeEventListener('fuelstate:changed', this._onFuelStateChanged);
         if (this._onConfirmPrompt) window.removeEventListener('fueltankstate:confirm_prompt', this._onConfirmPrompt);
         if (this._timerInterval) clearInterval(this._timerInterval);
         if (this._confirmTimer) clearTimeout(this._confirmTimer);
+        if (this._attnTimer) clearTimeout(this._attnTimer);
         if (this._mouseMoveHandler) document.removeEventListener('mousemove', this._mouseMoveHandler);
         if (this._mouseUpHandler)   document.removeEventListener('mouseup',   this._mouseUpHandler);
         if (this._dragHandle) {
@@ -99,12 +183,42 @@ class FuelTanksDisplay {
         if (!data) return;
         const d = data.data ? { ...data, ...data.data } : data;
         const gph = d.fuel_flow_gph ?? d.gph ?? d.Fuel_Flow ?? 0;
-        this._lastGph = gph;
-        if (gph > 0) {
-            FuelTankState.onSample(gph, Date.now());
+        // Burn only from a CURRENT EDM row. The Pi keeps resending its last row after
+        // the EDM goes quiet, so a frozen frame must not keep integrating burn.
+        // Same rule engine-ml.js uses. A gap is handled by onSample's dt logic on resume.
+        const edmCurrent = typeof EngineClient === 'undefined' || EngineClient.edmCurrent(d);
+        // A frozen frame's GPH is not live: treat flow as unknown (0) so the readout
+        // and endurance take the existing "no flow" rendering ('--') instead of
+        // presenting the last reading as current.
+        this._lastGph = edmCurrent ? gph : 0;
+        if (edmCurrent) {
+            const n = Number(gph);
+            this._lastCurrentGph = Number.isFinite(n) ? n : 0;
+            const r = Number(d.RPM ?? d.rpm);
+            this._lastCurrentRpm = Number.isFinite(r) ? r : 0;
+            if (gph > 0) FuelTankState.onSample(gph, Date.now());
+        } else {
+            // Burn is not being integrated. If the engine was running, the tracked
+            // figure now reads high: mark it UNCONFIRMED at once (cleared by the next
+            // integrated sample).
+            FuelTankState.markFlowLost(Date.now(), this._lastCurrentGph, this._lastCurrentRpm);
         }
-        this._updateSenderDisplay(d);
+        this._updateSenderDisplay(d, edmCurrent);
         // Update endurance when GPH changes without a state change
+        this._renderEndurance();
+    }
+
+    /** Flow is unknown (no engine frames): GPH and endurance read '--', the s:
+     *  sender readouts 's:—' (same as a frozen frame), and — if the engine was
+     *  running — the tracked figure is marked UNCONFIRMED (FuelTankState.markFlowLost). */
+    _clearFlow() {
+        this._lastGph = 0;
+        for (const el of [this._dom.senderL, this._dom.senderR]) {
+            if (el && el.textContent !== '') el.textContent = 's:\u2014';
+        }
+        if (typeof FuelTankState !== 'undefined') {
+            FuelTankState.markFlowLost(Date.now(), this._lastCurrentGph, this._lastCurrentRpm);
+        }
         this._renderEndurance();
     }
 
@@ -158,6 +272,8 @@ class FuelTanksDisplay {
                 </div>
             </div>
 
+            <div class="ftw-reveal-status" id="ftw-reveal-status" style="display:none"></div>
+
             <div class="ftw-init-panel" id="ftw-init-panel" style="display:none">
                 <div class="ftw-init-title" id="ftw-init-title">PREFLIGHT FUEL</div>
                 <div class="ftw-init-row">
@@ -207,6 +323,7 @@ class FuelTanksDisplay {
             imbal:         this._el.querySelector('#ftw-imbal'),
             editBtn:       this._el.querySelector('#ftw-edit-btn'),
             initPanel:     this._el.querySelector('#ftw-init-panel'),
+            revealStatus:  this._el.querySelector('#ftw-reveal-status'),
             initTitle:     this._el.querySelector('#ftw-init-title'),
             initL:         this._el.querySelector('#ftw-init-l'),
             initR:         this._el.querySelector('#ftw-init-r'),
@@ -246,8 +363,13 @@ class FuelTanksDisplay {
      * Tank badge tap
      * ----------------------------------------------------------------*/
     _onBadgeTap(tank) {
+        if (this._inRevealMode()) { this._onBadgeTapReveal(tank); return; }
+        if (this._dom.revealStatus && this._dom.revealStatus.style.display !== 'none') this._setRevealStatus('');
+        // getState() re-checks the 45-min staleness, so requires_confirm is current.
+        // Not needsConfirmation(): a lost fuel-flow feed (flow_lost_at) must not stop
+        // the pilot switching tanks in flight — the switch still has to be recorded.
         const state = FuelTankState.getState();
-        if (!state || FuelTankState.needsConfirmation()) {
+        if (!state || state.requires_confirm) {
             this._openInitDialog();
             return;
         }
@@ -511,18 +633,23 @@ class FuelTanksDisplay {
         this._dom.timerR.textContent = activeR ? label : '';
     }
 
-    _updateSenderDisplay(data) {
+    _updateSenderDisplay(data, edmCurrent = true) {
         // Raw EDM sender values — secondary reference only. Only meaningful (per this
         // aircraft's sender hardware) once tracked tank level drops to the configured
         // threshold; above it the sender reads an invalid/flat value and must not be
         // shown as if it were a real cross-check.
-        const senderL = data.fuel?.edm_fuel_left ?? null;
-        const senderR = data.fuel?.edm_fuel_right ?? null;
+        // The D-180 EMS's own per-tank fields (Fuel_Left / Fuel_Right), as forwarded by
+        // the Pi. Not the Pi tracker's data.fuel.*.
+        const emsNum = (v) => (v != null && v !== '' && Number.isFinite(Number(v))) ? Number(v) : null;
+        const senderL = emsNum(data.Fuel_Left);
+        const senderR = emsNum(data.Fuel_Right);
         const trackedState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
         const threshold = this._senderAccurateBelowGal ?? 12;
 
-        const leftInRange = !trackedState || trackedState.left_gal <= threshold;
-        const rightInRange = !trackedState || trackedState.right_gal <= threshold;
+        // A frozen frame (the Pi resending its last row) is not a current sender
+        // reading: show the same 's:—' as an out-of-range sender.
+        const leftInRange = edmCurrent && (!trackedState || trackedState.left_gal <= threshold);
+        const rightInRange = edmCurrent && (!trackedState || trackedState.right_gal <= threshold);
 
         if (senderL != null) {
             this._dom.senderL.textContent = leftInRange ? 's:' + senderL.toFixed(1) : 's:\u2014';
@@ -598,3 +725,7 @@ class FuelTanksDisplay {
     }
 
 }
+
+/** How long revealTankControl() keeps reveal mode (badges outlined; badge taps
+ *  confirm or switch the tank and never open the quantity dialog). */
+FuelTanksDisplay.REVEAL_MS = 30000;

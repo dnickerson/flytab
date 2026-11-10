@@ -32,6 +32,8 @@ class Checklist {
         // is the resumed one's after a restart.
         window.addEventListener('flightsync:started', () => this._refreshCapture());
         window.addEventListener('flightsync:stopped', () => this._refreshCapture());
+        // Live status for `link` items (Checklist.LINKS), updated in place.
+        window.addEventListener('fueltankstate:changed', () => this._refreshLinks());
     }
 
     // ========== Overlay lifecycle ==========
@@ -275,12 +277,22 @@ class Checklist {
                 vpnBadgeClass = ` checklist-vpn-badge checklist-vpn-badge--${d.state}`;
             }
 
+            // `link`: live status + a button that opens the matching control (LINKS).
+            let linkHtml = '';
+            const link = Checklist.LINKS[item.link];
+            if (link) {
+                const name = this._esc(item.link);
+                linkHtml = `<span class="checklist-link-status" data-link-status="${name}">${this._esc(link.status())}</span>` +
+                    `<button type="button" class="checklist-link-btn" data-link="${name}">${this._esc(link.label)}</button>`;
+            }
+
             html += `<div class="checklist-item${checked ? ' checked' : ''}${emergencyClass}${infoClass}${actionClass}" data-idx="${i}">
                 <div class="checklist-item-main">
                     <span class="checklist-item-title">${this._esc(item.title)}</span>
                     <span class="checklist-item-dots"></span>
                     <span class="checklist-item-response${vpnBadgeClass}"${liveResponseClass}>${liveResponse}</span>
                     ${vpnOpenBtn}
+                    ${linkHtml}
                     ${hasAction ? '<span class="checklist-item-action-icon">\u25B6</span>' : ''}
                     ${hasNote ? '<span class="checklist-item-note-icon">\u2139</span>' : ''}
                     <span class="checklist-item-check">${checked ? '\u2713' : '\u25CB'}</span>
@@ -323,6 +335,9 @@ class Checklist {
             // produce a synthetic click: the shared isolated tap (shared/tap-utils.js).
             const vpnOpen = el.querySelector('.checklist-vpn-open');
             if (vpnOpen) wireIsolatedTap(vpnOpen, () => VpnStatus.open(vpnOpen.dataset.vpnApp));
+            // A link button, like OPEN, never reaches the row's check-off.
+            const linkBtn = el.querySelector('.checklist-link-btn');
+            if (linkBtn) wireIsolatedTap(linkBtn, () => this._openLink(linkBtn.dataset.link));
             const noteIcon = el.querySelector('.checklist-item-note-icon');
             const noteEl = el.querySelector('.checklist-item-note');
             if (noteIcon && noteEl) {
@@ -405,6 +420,32 @@ class Checklist {
             // showToast leaves it until dismissed; a mark confirmation should not stay over the list.
             if (el?.remove) setTimeout(() => el.remove(), Checklist.TOAST_MS);
         } catch { /* no toast available */ }
+    }
+
+    // ========== Item links (Checklist.LINKS) ==========
+
+    /** Open the control a `link` item names. */
+    _openLink(name) {
+        const link = Checklist.LINKS[name];
+        if (!link) return;
+        try { link.open(this); } catch (err) { console.warn('Checklist link failed:', name, err); }
+    }
+
+    /** Leave the checklist for the map: through the tab bar when there is one (so
+     *  its active tab follows), else just close the overlay. */
+    _goToMap() {
+        const tabBar = window.app?.tabBar;
+        if (tabBar?.selectTab) tabBar.selectTab('map');
+        else this.hide();
+    }
+
+    /** Update every visible link status in place (no re-render). */
+    _refreshLinks() {
+        if (!this._bodyEl) return;
+        this._bodyEl.querySelectorAll('[data-link-status]').forEach(el => {
+            const link = Checklist.LINKS[el.dataset.linkStatus];
+            if (link) el.textContent = link.status();
+        });
     }
 
     // ========== Live VPN status ==========
@@ -585,3 +626,26 @@ Checklist.TOAST_MS = 3000;
 
 // Live VPN status refresh while the checklist is open.
 Checklist.VPN_POLL_MS = 2000;
+
+// Item `link` property -> { label, status(), open(checklist) }. status() is the live
+// text beside the response; the button (label) opens the control. Generic: add an
+// entry here and set "link" on the item in checklist.json.
+Checklist.LINKS = {
+    // Before Start "FlyTab Tank": FuelTankState charges burn to the active tank. SET
+    // goes to the map and reveals the fuel tanks widget, whose L / R badges set it
+    // (FuelTanksDisplay.revealTankControl → _onBadgeTap → FuelTankState.switchTank).
+    'fuel-tank': {
+        label: 'SET',
+        status() {
+            let tank = null;
+            try {
+                tank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState()?.active_tank : null;
+            } catch { tank = null; }
+            return 'FlyTab: ' + (tank === 'L' ? 'LEFT' : tank === 'R' ? 'RIGHT' : 'NOT SET');
+        },
+        open(checklist) {
+            checklist._goToMap();
+            window.app?.fuelTanksDisplay?.revealTankControl?.();
+        },
+    },
+};

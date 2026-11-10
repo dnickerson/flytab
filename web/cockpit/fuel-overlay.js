@@ -1,10 +1,27 @@
 /**
  * FlyTab — Fuel Overlay
- * Full-screen overlay for tic mark entry, EDM comparison, and fuel source management.
+ * Full-screen overlay for tic mark entry, tic vs tracked-fuel comparison, and fuel source management.
  * Same pattern as EnginePage: show/hide with buildDOM, reads from FuelEngine + FuelState.
  */
 
 class FuelOverlay {
+    /** K-factor outlier gate (Ruling 15d, PR #214 finding 4 + re-review ruling).
+     *  Default: a leg whose tracked ÷ actual is more than KF_OUTLIER_FRAC off 1.0 is
+     *  excluded. The gate is centred on the MEDIAN ratio of the candidate legs
+     *  instead only when the median can be trusted: ≥ KF_MEDIAN_MIN_LEGS candidates
+     *  AND (|median − 1| ≤ KF_OUTLIER_FRAC, OR (≥ KF_MEDIAN_SHIFT_MIN_LEGS
+     *  candidates AND ≥ KF_MEDIAN_SHIFT_AGREE of them within KF_OUTLIER_FRAC of the
+     *  median)). So a correction larger than 25 % needs ≥ 4 consistent legs, and two
+     *  bad legs (e.g. APPLY-TIC top-offs) cannot become the median and push out a
+     *  good one. */
+    static KF_OUTLIER_FRAC = 0.25;
+    static KF_MEDIAN_MIN_LEGS = 3;
+    static KF_MEDIAN_SHIFT_MIN_LEGS = 4;
+    static KF_MEDIAN_SHIFT_AGREE = 0.75;
+    /** K-factor: the New K-Factor guidance needs at least this much actual burn over
+     *  the counted legs (Ruling 16). */
+    static KF_MIN_ACTUAL_GAL = 30;
+
     constructor(container) {
         this._container = container;
         this._el = null;
@@ -15,15 +32,12 @@ class FuelOverlay {
         this._maxTic = 17;
         this._ticStep = 0.5;
         this._coefficients = FuelEngine.DEFAULT_COEFFICIENTS;
-        this._cachedCsvEdmFuel = 0;
         this._shownAt = 0;
         this._applying = false;
-        // Re-entrancy guard for _recordFuelStop(), same rationale as _applying above:
-        // the Pi sync it awaits (_syncFuelAddToEngine, up to 4000ms) is a real network
-        // round trip, so a second RECORD tap before the first settles must be refused
-        // rather than racing past the guard-clearing side effects that only run after
-        // the await — otherwise a double tap can duplicate a fuel-stop entry and
-        // double-add gallons to the Pi's authoritative fuel total.
+        // Re-entrancy latch for _recordFuelStop(). That method is synchronous, so two
+        // taps cannot overlap today; the latch is kept as a defensive guard in case an
+        // await is ever reintroduced. A double tap is refused by the consumed-reading
+        // guard (_ticsTouchedSinceShow) instead.
         this._recording = false;
         // True once the pilot has moved a slider, typed in a tic field or tapped a
         // ± button since the current show(). show() restores the PREVIOUS
@@ -38,28 +52,6 @@ class FuelOverlay {
         // the DEPARTURE reading, and BOTH write paths into canonical FuelTankState —
         // _applyMeasurement() and _recordFuelStop() — must refuse it.
         this._requireFreshTics = false;
-        // True when the last attempt to sync a dropped-burn correction to the Pi
-        // failed (Pi unreachable, or a non-2xx response) — set/cleared only by
-        // _syncDroppedBurnToPi(). Drives _refreshDroppedBurnRow() to keep the row
-        // visible with a RETRY affordance even after the local correction already
-        // landed, so a failed Pi sync isn't a dead end (see PR #143 review).
-        this._piSyncFailed = false;
-        // Mirrors _piSyncFailed but for the RECORD FUEL STOP path — set when
-        // _syncFuelAddToEngine() fails after a fuel stop has already been recorded
-        // locally (flytab_fuel_stops + FuelTankState). _lastFuelStopPending holds the
-        // exact {gallons, airport, price} that failed to reach the Pi, so the RECORD
-        // FUEL STOP button can dual-purpose as a Pi-only retry (same pattern as
-        // _piSyncFailed / _retryPiDroppedBurnSync(), PR #143) instead of forcing the
-        // pilot to re-enter a fresh tic reading — which would append a SECOND
-        // flytab_fuel_stops entry and, since the Pi's fuel total is additive, could
-        // double-add gallons if the original POST actually landed despite the
-        // client-side failure (Finding 1, 2026-09 whole-branch audit). Only the most
-        // recently failed fuel stop is tracked; if a second, distinct stop is recorded
-        // successfully before an earlier failure is retried, the earlier failure's
-        // tracking is intentionally superseded (single-slot, not a queue) — matches
-        // the scope of the audit finding.
-        this._fuelStopPiSyncFailed = false;
-        this._lastFuelStopPending = null;
         this._buildDOM();
     }
 
@@ -132,17 +124,17 @@ class FuelOverlay {
                 <div class="fo-add-status" id="fo-dropped-burn-status"></div>
             </div>
 
-            <!-- B) EDM COMPARISON -->
+            <!-- B) TIC vs TRACKED COMPARISON (tracked = tablet FuelTankState) -->
             <div class="fo-edm-section" id="fo-edm-section" style="display:none;">
-                <div class="fo-section-title">EDM COMPARISON</div>
+                <div class="fo-section-title">TIC vs TRACKED</div>
                 <div class="fo-edm-row">
                     <div class="fo-edm-item">
                         <div class="fo-edm-label">TIC</div>
                         <div class="fo-edm-val" id="fo-edm-tic">--</div>
                     </div>
                     <div class="fo-edm-item">
-                        <div class="fo-edm-label">EDM</div>
-                        <div class="fo-edm-val" id="fo-edm-edm">--</div>
+                        <div class="fo-edm-label" id="fo-edm-tracked-label">TRACKED</div>
+                        <div class="fo-edm-val" id="fo-edm-tracked">--</div>
                     </div>
                     <div class="fo-edm-item">
                         <div class="fo-edm-label">VARIANCE</div>
@@ -153,6 +145,7 @@ class FuelOverlay {
                         <div class="fo-edm-badge" id="fo-edm-grade">--</div>
                     </div>
                 </div>
+                <div class="fo-edm-d180" id="fo-edm-d180" style="display:none;"></div>
             </div>
 
             <!-- C) ACTIVE FUEL SOURCE -->
@@ -160,9 +153,7 @@ class FuelOverlay {
             <div class="fo-source-chain" id="fo-source-chain">
                 <span class="fo-source-chip" data-src="manual">MANUAL</span>
                 <span class="fo-source-sep">\u203A</span>
-                <span class="fo-source-chip" data-src="edm">EDM</span>
-                <span class="fo-source-sep">\u203A</span>
-                <span class="fo-source-chip" data-src="tic">TIC</span>
+                <span class="fo-source-chip" data-src="tank_state">TRACKED</span>
                 <span class="fo-source-sep">\u203A</span>
                 <span class="fo-source-chip" data-src="capacity">CAPACITY</span>
             </div>
@@ -214,7 +205,7 @@ class FuelOverlay {
                         <tr>
                             <th>DATE / TIME</th>
                             <th>TIC (gal)</th>
-                            <th>EDM (gal)</th>
+                            <th>TRACKED (gal)</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -227,11 +218,11 @@ class FuelOverlay {
             <div class="fo-kfactor-panel" id="fo-kfactor-panel">
                 <div class="fo-kfactor-row">
                     <div class="fo-kfactor-item">
-                        <div class="fo-kfactor-label">FUEL FILLED (actual)</div>
+                        <div class="fo-kfactor-label">ACTUAL USED (tic + fuel stops)</div>
                         <div class="fo-kfactor-val" id="fo-kf-filled">-- gal</div>
                     </div>
                     <div class="fo-kfactor-item">
-                        <div class="fo-kfactor-label">FUEL USED (EDM)</div>
+                        <div class="fo-kfactor-label">TRACKED USED (fuel flow)</div>
                         <div class="fo-kfactor-val" id="fo-kf-used">-- gal</div>
                     </div>
                     <div class="fo-kfactor-item">
@@ -240,28 +231,15 @@ class FuelOverlay {
                     </div>
                 </div>
                 <div class="fo-kfactor-guidance" id="fo-kf-guidance"></div>
+                <div class="fo-kfactor-excluded" id="fo-kf-excluded" style="display:none;"></div>
                 <div class="fo-kfactor-note">
-                    Ratio = Filled ÷ Used (EDM). Multiply by current K-factor to correct fuel flow accuracy.
-                </div>
-            </div>
-
-            <!-- H) PI K-FACTOR (LIVE) -->
-            <div id="fo-kfactor-pi" style="display:none;">
-                <div class="fo-section-title">PI K-FACTOR (LIVE)</div>
-                <div class="fo-kfactor-panel">
-                    <div class="fo-kfactor-row">
-                        <div class="fo-kfactor-item">
-                            <div class="fo-kfactor-label">CURRENT (PI)</div>
-                            <div class="fo-kfactor-val" id="fo-kf-pi-current">--</div>
-                        </div>
-                        <div class="fo-kfactor-item">
-                            <div class="fo-kfactor-label">SUGGESTED (PI)</div>
-                            <div class="fo-kfactor-val" id="fo-kf-pi-suggested">--</div>
-                        </div>
-                    </div>
-                    <div class="fo-kfactor-guidance" id="fo-kf-pi-recommendation"></div>
-                    <button class="fo-manual-btn fo-set-btn" id="fo-kf-pi-apply" style="display:none;">APPLY TO PI</button>
-                    <div class="fo-add-status" id="fo-kf-pi-status"></div>
+                    Ratio = Tracked used ÷ Actual used, over the legs between tic measurements. Tracked burn
+                    is integrated from the D-180 fuel-flow reading.
+                    Dynon's rule (FlightDEK-D180 Installation Guide, p. 6-14):
+                    if GALS USED reads higher than you expect, increase the K-factor. So
+                    New K-factor = Current K-factor × Ratio. A leg counts only with fuel tracked the whole way
+                    (no SET or CONFIRM in between, not unconfirmed) and tracked within 25% of actual; the
+                    change is suggested once the counted legs add up to 30 gal.
                 </div>
             </div>
         </div>`;
@@ -284,7 +262,9 @@ class FuelOverlay {
             droppedBurnStatus: this._el.querySelector('#fo-dropped-burn-status'),
             edmSection: this._el.querySelector('#fo-edm-section'),
             edmTic: this._el.querySelector('#fo-edm-tic'),
-            edmEdm: this._el.querySelector('#fo-edm-edm'),
+            edmTracked: this._el.querySelector('#fo-edm-tracked'),
+            edmTrackedLabel: this._el.querySelector('#fo-edm-tracked-label'),
+            edmD180: this._el.querySelector('#fo-edm-d180'),
             edmVar: this._el.querySelector('#fo-edm-var'),
             edmGrade: this._el.querySelector('#fo-edm-grade'),
             sourceChain: this._el.querySelector('#fo-source-chain'),
@@ -306,12 +286,7 @@ class FuelOverlay {
             kfUsed:    this._el.querySelector('#fo-kf-used'),
             kfRatio:   this._el.querySelector('#fo-kf-ratio'),
             kfGuidance: this._el.querySelector('#fo-kf-guidance'),
-            kfPiSection: this._el.querySelector('#fo-kfactor-pi'),
-            kfPiCurrent: this._el.querySelector('#fo-kf-pi-current'),
-            kfPiSuggested: this._el.querySelector('#fo-kf-pi-suggested'),
-            kfPiRecommendation: this._el.querySelector('#fo-kf-pi-recommendation'),
-            kfPiApply: this._el.querySelector('#fo-kf-pi-apply'),
-            kfPiStatus: this._el.querySelector('#fo-kf-pi-status'),
+            kfExcluded: this._el.querySelector('#fo-kf-excluded'),
         };
 
         // Wire close
@@ -396,15 +371,9 @@ class FuelOverlay {
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
         });
 
-        // Wire dropped-burn correction. When only a Pi sync is outstanding (local
-        // side already applied but the Pi never got it), the button retries just
-        // the Pi sync instead of re-touching FuelTankState — see _refreshDroppedBurnRow().
+        // Wire dropped-burn correction (applied on the tablet's FuelTankState only).
         wireTap(this._el.querySelector('#fo-dropped-burn-apply'), () => {
-            if (this._piSyncFailed && !(FuelTankState.getState()?.dropped_burn_estimate_gal > 0.05)) {
-                this._retryPiDroppedBurnSync();
-            } else {
-                this._applyDroppedBurnCorrection();
-            }
+            this._applyDroppedBurnCorrection();
         });
 
         // Wire apply
@@ -412,23 +381,13 @@ class FuelOverlay {
             this._applyMeasurement();
         });
 
-        // Wire fuel-add record button. Dual-purpose, same pattern as the dropped-burn
-        // APPLY/RETRY button: when the last fuel stop's Pi sync failed and the pilot
-        // has not entered a new gallons figure (addGal is empty — it's cleared after
-        // every record attempt, success or failure), this tap retries ONLY the Pi
-        // sync for the pending stop rather than recording a new one.
-        wireTap(this._el.querySelector('#fo-add-record'), () => {
-            const newGalEntered = parseFloat(this._dom.addGal.value) > 0;
-            if (this._fuelStopPiSyncFailed && this._lastFuelStopPending && !newGalEntered) {
-                this._retryFuelStopPiSync();
-            } else {
-                this._recordFuelStop();
-            }
-        });
+        // Gallons typed into FUEL ADDED change what the tic should read (tracked +
+        // pumped), so the TIC vs TRACKED block re-grades as they are typed.
+        this._dom.addGal.addEventListener('input', () => this._updateTrackedComparison());
 
-        // Wire Pi K-factor apply button
-        wireTap(this._el.querySelector('#fo-kf-pi-apply'), () => {
-            this._applyPiKFactor();
+        // Wire fuel-add record button
+        wireTap(this._el.querySelector('#fo-add-record'), () => {
+            this._recordFuelStop();
         });
     }
 
@@ -495,36 +454,13 @@ class FuelOverlay {
         this._dom.addStatus.textContent = '';
         if (this._dom.applyStatus) this._dom.applyStatus.textContent = '';
 
-        // Unlike _ticsTouchedSinceShow, a pending failed fuel-stop Pi sync is NOT a
-        // per-session thing — closing and reopening the overlay doesn't make the Pi's
-        // fuel total any less wrong, so this persists across show()/hide() (mirrors
-        // _piSyncFailed) and is re-surfaced here rather than reset.
-        this._refreshFuelStopButton();
-        if (this._fuelStopPiSyncFailed && this._lastFuelStopPending) {
-            const { gallons, airport, reason } = this._lastFuelStopPending;
-            this._setAddStatus(
-                `Pi still doesn't have the +${gallons.toFixed(1)} gal fuel stop at ${airport || '—'} ` +
-                `(${reason}). No new reading needed — tap RECORD FUEL STOP to retry sending it to the Pi.`,
-                'error');
-        }
-
         this._updateDisplay();
         this._updateSourceDisplay();
         this._renderHistory();
         this._renderKFactor();
-        this._fetchPiCalibration();
-        this._cachedCsvEdmFuel = 0;
         this._el.style.display = 'flex';
         this._visible = true;
         this._shownAt = Date.now();
-
-        // Pre-fetch last flight CSV EDM value for comparison display
-        this._resolveEdmFuel().then(val => {
-            if (val > 0) {
-                this._cachedCsvEdmFuel = val;
-                this._updateDisplay();
-            }
-        });
     }
 
     hide() {
@@ -549,8 +485,8 @@ class FuelOverlay {
         this._dom.rightGal.classList.toggle('fo-gal-implausible', rightGal > cap);
         this._dom.totalGal.textContent = total.toFixed(1);
 
-        // EDM comparison
-        this._updateEdmComparison(total);
+        // Tic vs tracked comparison
+        this._updateTrackedComparison();
     }
 
     /**
@@ -574,67 +510,106 @@ class FuelOverlay {
                     this._dom.droppedBurnInput.value = dropped.toFixed(1);
                 }
                 this._dom.droppedBurnApply.textContent = 'APPLY CORRECTION';
-            } else if (this._piSyncFailed) {
-                // Nothing left to apply locally, but the Pi never got its own
-                // correction — keep the row up as a retry affordance rather than
-                // silently dropping the pilot's confirmed correction (PR #143 review).
-                this._dom.droppedBurnVal.textContent = '0.0';
-                this._dom.droppedBurnRow.style.display = '';
-                this._dom.droppedBurnInput.value = '0.0';
-                this._dom.droppedBurnInput.disabled = true;
-                this._dom.droppedBurnApply.textContent = 'RETRY PI SYNC';
             } else {
                 this._dom.droppedBurnRow.style.display = 'none';
             }
         } catch (_) { /* FuelTankState unavailable */ }
     }
 
-    _updateEdmComparison(ticTotal) {
-        let edmFuel = 0;
-        let isStale = false;
+    /**
+     * The tablet's tracked fuel on board: FuelTankState left + right, rounded to
+     * 0.1 gal like a measurement's total_gal. Null when nothing is tracked. A manual
+     * override is deliberately NOT used here: it is a pilot entry, not a measurement.
+     * `stale` reuses FuelState.getCurrentFuel()'s rule (FuelTankState.needsConfirmation()).
+     * `since` is the FuelTankState init this figure counts from (initialized_at);
+     * `droppedApplied` the dropped-burn corrections applied since then (0 when the
+     * stored state predates that field). `flowBurn` is the fuel-flow burn since that
+     * init: burned_since_init_gal − droppedApplied. It counts burn charged to a tank
+     * already floored at 0, which the tank total cannot show. Null when the stored
+     * state predates burned_since_init_gal.
+     * @returns {{gal: number, stale: boolean, since: (string|null), droppedApplied: number,
+     *            flowBurn: (number|null)}|null}
+     */
+    _trackedTotal() {
         try {
-            const panel = window.enginePanel;
-            // Freshness only controls the "(LAST)" label here — unlike _resolveEdmFuel()
-            // (a one-shot resolution used when confirming a fuel-state entry, which must
-            // stay strict), this is a passive preview and a momentarily-stale or
-            // post-disconnect panel reading is still better than substituting a CSV
-            // value from a different, earlier flight. Only fall through to the CSV
-            // cache when the panel has never reported anything this session.
-            const panelFresh = panel?.lastPollTime &&
-                (Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS;
-            if (panel?.lastData) {
-                edmFuel = FuelEngine.extractEdmFuel(panel.lastData);
-                isStale = !panelFresh;
-            }
-            // Fallback: cached value from last flight CSV (loaded on show()) — only
-            // when the panel has no reading at all.
-            if (!edmFuel && this._cachedCsvEdmFuel > 0) {
-                edmFuel = this._cachedCsvEdmFuel;
-                isStale = true;
-            }
-        } catch (_) { /* no engine data */ }
+            if (typeof FuelTankState === 'undefined') return null;
+            const st = FuelTankState.getState();
+            if (!st) return null;
+            const gal = Math.round((st.left_gal + st.right_gal) * 10) / 10;
+            if (!Number.isFinite(gal)) return null;
+            let stale = false;
+            try { stale = !!FuelTankState.needsConfirmation(); } catch (_) { stale = false; }
+            const since = st.initialized_at ?? null;
+            const droppedApplied = (typeof st.dropped_applied_since_init_gal === 'number' &&
+                Number.isFinite(st.dropped_applied_since_init_gal)) ? st.dropped_applied_since_init_gal : 0;
+            const burned = st.burned_since_init_gal;
+            const flowBurn = (typeof burned === 'number' && Number.isFinite(burned))
+                ? Math.max(0, burned - droppedApplied) : null;
+            return { gal, stale, since, droppedApplied, flowBurn };
+        } catch (_) { return null; }
+    }
 
-        if (edmFuel > 0) {
-            this._dom.edmSection.style.display = '';
-            const m = FuelEngine.createMeasurement(
-                this._leftTic, this._rightTic, this._coefficients, edmFuel
-            );
-            this._dom.edmTic.textContent = m.total_gal.toFixed(1) + ' gal';
-            this._dom.edmEdm.textContent = edmFuel.toFixed(1) + (isStale ? ' (LAST)' : '') + ' gal';
+    /** Valid gallons in FUEL ADDED (a number > 0), else 0. */
+    _addedGallons() {
+        const v = parseFloat(this._dom.addGal ? this._dom.addGal.value : '');
+        return (Number.isFinite(v) && v > 0) ? v : 0;
+    }
+
+    /**
+     * TIC | TRACKED | VARIANCE (TIC − TRACKED) | ACCURACY, plus a smaller
+     * "D-180: <x> gal" line when the D-180's own fuel figure is fresh. Hidden when
+     * there is no tracked tank state to compare with. With gallons in FUEL ADDED the
+     * tic is graded against tracked + those gallons (what a fuel stop should read),
+     * labelled "TRACKED + x ADDED".
+     */
+    _updateTrackedComparison() {
+        const tracked = this._trackedTotal();
+        if (!tracked) {
+            this._dom.edmSection.style.display = 'none';
+            return;
+        }
+        this._dom.edmSection.style.display = '';
+        const added = this._addedGallons();
+        const ref = Math.round((tracked.gal + added) * 10) / 10;
+        const m = FuelEngine.createMeasurement(
+            this._leftTic, this._rightTic, this._coefficients, null, ref
+        );
+        this._dom.edmTic.textContent = m.total_gal.toFixed(1) + ' gal';
+        if (this._dom.edmTrackedLabel) {
+            this._dom.edmTrackedLabel.textContent =
+                added > 0 ? `TRACKED + ${added.toFixed(1)} ADDED` : 'TRACKED';
+        }
+        this._dom.edmTracked.textContent = ref.toFixed(1) + ' gal' +
+            (tracked.stale ? ' (UNCONFIRMED)' : '');
+        if (m.variance_gal != null) {
             this._dom.edmVar.textContent = (m.variance_gal > 0 ? '+' : '') + m.variance_gal.toFixed(1) + ' gal';
-
             const grade = m.accuracy || 'check';
             this._dom.edmGrade.textContent = grade.toUpperCase();
             this._dom.edmGrade.className = 'fo-edm-badge fo-grade-' + grade;
         } else {
-            this._dom.edmSection.style.display = 'none';
+            // Tracked 0.0 gal: createMeasurement() grades only against a positive figure.
+            this._dom.edmVar.textContent = '--';
+            this._dom.edmGrade.textContent = '--';
+            this._dom.edmGrade.className = 'fo-edm-badge';
+        }
+
+        const d180 = this._resolveD180Fuel();
+        if (d180 != null) {
+            // Label at 700, the number a data value at 900 (.fo-edm-d180-val).
+            this._dom.edmD180.innerHTML =
+                `<span class="fo-edm-d180-lbl">D-180:</span> <span class="fo-edm-d180-val">${d180.toFixed(1)} gal</span>`;
+            this._dom.edmD180.style.display = '';
+        } else {
+            this._dom.edmD180.textContent = '';
+            this._dom.edmD180.style.display = 'none';
         }
     }
 
     _updateSourceDisplay() {
-        const { gallons, source } = FuelState.getStartFuel();
+        const { gallons, source, stale } = FuelState.getCurrentFuel();
+        const label = source === 'tank_state' ? 'TRACKED' : source.toUpperCase();
         this._dom.sourceDisplay.textContent =
-            `${gallons.toFixed(1)} gal (${source.toUpperCase()})`;
+            `${gallons.toFixed(1)} gal (${label})` + (stale ? ' \u00B7 UNCONFIRMED' : '');
 
         // Highlight active chip in priority chain
         const chips = this._dom.sourceChain.querySelectorAll('.fo-source-chip');
@@ -646,8 +621,8 @@ class FuelOverlay {
     /**
      * Returns an error message if either tank's CURRENT tic-derived gallons
      * exceeds capacity, else null. A single shared check so _applyMeasurement()
-     * and _recordFuelStop() can't drift apart, and so it can be re-run at write
-     * time (not just at tap time) — see _applyMeasurement()'s re-check comment.
+     * and _recordFuelStop() can't drift apart. Both run it immediately before
+     * their (synchronous) write, so it validates the value actually written.
      */
     _ticCapacityError() {
         const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
@@ -665,7 +640,8 @@ class FuelOverlay {
     _applyMeasurement() {
         // Guard against tap-through: ignore if overlay just opened (< 600ms ago)
         if (Date.now() - this._shownAt < 600) return;
-        // Guard against double-tap during the async EDM resolve (can take 3-5s)
+        // Re-entrancy latch. APPLY is synchronous (no network wait), so this is
+        // defensive: it refuses a re-entrant call made from inside the write path.
         if (this._applying) return;
 
         // Opened from the in-flight fuel-stop overlay: APPLY writes canonical
@@ -674,7 +650,7 @@ class FuelOverlay {
         // DEPARTURE reading into the tic fields, so tapping this button without touching
         // a control would report "Measured: <departure gallons>" over tanks that have
         // since burned down — the same defect as the record path, on the larger button.
-        // Refuse here, before the async resolve and before any write, so FuelState,
+        // Refuse here, before any write, so FuelState,
         // FuelTankState and initialized_at are all left byte-identical.
         // A reading that genuinely equals the restored one is confirmed the same way as
         // for RECORD: any ± nudge or slider touch sets the flag, so a + then − round trip
@@ -696,28 +672,15 @@ class FuelOverlay {
         }
 
         this._applying = true;
-
-        // Resolve EDM fuel async, then complete measurement
-        this._resolveEdmFuel().then(async edmFuel => {
-            // Re-check: the pilot can edit the tic reading during the async EDM
-            // resolve above (its own comment elsewhere notes this "can take
-            // 3-5s"), and nothing disables the sliders meanwhile. The guard above
-            // only validated the value at tap time — re-validate the CURRENT
-            // value here, right before it's written, so an implausible edit made
-            // mid-flight can't slip past the guard this re-check exists for
-            // (2026-09 audit finding).
-            const capErrorNow = this._ticCapacityError();
-            if (capErrorNow) {
-                this._setApplyStatus(`${capErrorNow} — check the tic reading before applying`, 'error');
-                return;
-            }
-            const m = FuelEngine.createMeasurement(
-                this._leftTic, this._rightTic, this._coefficients, edmFuel
-            );
+        try {
+            // Both figures are taken BEFORE FuelTankState.init() below overwrites the
+            // tracked state with this tic reading.
+            const m = this._createRecordedMeasurement();
             FuelState.saveMeasurement(m);
             if (typeof FuelTankState !== 'undefined') {
                 const existing = FuelTankState.getState();
                 FuelTankState.init(m.left_gal, m.right_gal, existing?.active_tank ?? 'L');
+                m.tank_init_at = FuelTankState.getState()?.initialized_at ?? null;
                 // Belt-and-suspenders: re-dispatch so the gauge widget re-renders even
                 // if the synchronous dispatch inside init() was swallowed by the WebView.
                 window.dispatchEvent(new CustomEvent('fueltankstate:changed'));
@@ -726,73 +689,71 @@ class FuelOverlay {
             this._updateSourceDisplay();
             this._syncMeasurement(m);
             this._renderHistory();
-            // Sync authoritative tic measurement to Pi so both systems agree. Reported
-            // to the pilot instead of swallowed — a failed sync here means the Pi's own
-            // fuel total silently diverges from what FlyTab now shows (PR #143 audit).
-            const synced = await this._syncFuelSetToEngine(m.total_gal, 'Preflight tic mark measurement');
-            if (synced.ok) {
-                this.hide();
-            } else {
-                this._setApplyStatus(synced.message, 'error');
-            }
-        }).catch(err => console.error('[FuelOverlay] applyMeasurement failed:', err))
-          .finally(() => { this._applying = false; });
+            this.hide();
+        } catch (err) {
+            console.error('[FuelOverlay] applyMeasurement failed:', err);
+        } finally {
+            this._applying = false;
+        }
     }
 
     /**
-     * Resolve the best available EDM fuel remaining value.
-     * Priority: live engine panel → last row of most recent flight CSV.
-     * Returns null if no value is available.
+     * A measurement record for the current tic reading. tracked_gal is the tablet's
+     * tracked total (null when nothing is tracked) and must be read before the tic
+     * re-initialises FuelTankState; edm_gal is the D-180's own fuel figure when
+     * fresh, else null. variance_gal / variance_pct / accuracy grade the tic
+     * against tracked_gal + `addedGal` (the gallons pumped, for a fuel stop: the tic
+     * is taken after fuelling, tracked_gal before it).
+     * For the K-factor (all read with tracked_gal, before the re-init):
+     *   tracked_since  — FuelTankState.initialized_at that tracked_gal counts from
+     *   tracked_stale  — tracked_gal was unconfirmed (needsConfirmation())
+     *   dropped_applied_since_init_gal — applied dropped-burn gallons inside tracked_gal
+     *   flow_burn_since_init_gal — fuel-flow burn since tracked_since
+     *                    (burned_since_init_gal − dropped_applied_since_init_gal;
+     *                    null when the stored state predates burned_since_init_gal)
+     * (null / null / 0 / null when nothing is tracked). The caller adds tank_init_at,
+     * the init this measurement creates, after FuelTankState.init().
+     * @param {number} [addedGal=0] - gallons pumped (RECORD FUEL STOP), else 0
      */
-    async _resolveEdmFuel() {
-        // 1. Live engine panel (fresh within 10s)
+    _createRecordedMeasurement(addedGal = 0) {
+        const tracked = this._trackedTotal();
+        const ref = tracked ? Math.round((tracked.gal + (addedGal > 0 ? addedGal : 0)) * 10) / 10 : null;
+        const m = FuelEngine.createMeasurement(
+            this._leftTic, this._rightTic, this._coefficients, this._resolveD180Fuel(), ref);
+        m.tracked_gal = tracked ? tracked.gal : null;
+        m.tracked_since = tracked ? tracked.since : null;
+        m.tracked_stale = tracked ? tracked.stale : null;
+        m.dropped_applied_since_init_gal = tracked ? tracked.droppedApplied : 0;
+        m.flow_burn_since_init_gal = tracked ? tracked.flowBurn : null;
+        m.tank_init_at = null;
+        return m;
+    }
+
+    /**
+     * The Dynon D-180's own fuel-remaining figure (data.Fuel_Remaining) from a fresh
+     * engine panel (polled within FuelState.EDM_FRESHNESS_MS) whose frame carries a
+     * current EDM row (EngineClient.edmCurrent: the Pi keeps resending its last row
+     * after the EDM goes quiet), else null. Synchronous: no file-server or CSV
+     * lookup, so APPLY TIC never waits on the network.
+     */
+    _resolveD180Fuel() {
         try {
             const panel = window.enginePanel;
-            if (panel && panel.lastData && panel.lastPollTime) {
-                if ((Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS) {
-                    const val = FuelEngine.extractEdmFuel(panel.lastData);
-                    if (val > 0) return val;
-                }
+            if (panel && panel.lastData && panel.lastPollTime &&
+                (Date.now() - panel.lastPollTime) < FuelState.EDM_FRESHNESS_MS &&
+                (typeof EngineClient === 'undefined' || EngineClient.edmCurrent(panel.lastData))) {
+                const val = FuelEngine.extractEdmFuel(panel.lastData);
+                if (val > 0) return val;
             }
-        } catch (_) { /* */ }
-
-        // 2. Last row of the most recent flight CSV from internal storage
-        try {
-            const listResp = await fetch('http://localhost:9090/flights/list',
-                { signal: AbortSignal.timeout(3000) });
-            if (!listResp.ok) return null;
-            const files = await listResp.json();
-            // files is [{name, size_bytes, modified_ms}, ...] sorted newest-first
-            const flightFiles = files
-                .map(f => (typeof f === 'string' ? f : f.name))
-                .filter(name => /^\d{8}_/.test(name));
-            if (!flightFiles.length) return null;
-
-            const csvResp = await fetch(`http://localhost:9090/flights/${flightFiles[0]}`,
-                { signal: AbortSignal.timeout(5000) });
-            if (!csvResp.ok) return null;
-            const text = await csvResp.text();
-
-            // Find last non-empty data row (skip header)
-            const lines = text.trim().split('\n');
-            for (let i = lines.length - 1; i >= 1; i--) {
-                const cols = lines[i].split(',');
-                // Gallons Remaining is column index 9
-                const gal = parseFloat(cols[9]);
-                if (gal > 0) return gal;
-            }
-        } catch (_) { /* server unavailable or no flights */ }
-
+        } catch (_) { /* no engine data */ }
         return null;
     }
 
-    async _recordFuelStop() {
-        // Re-entrancy guard, same rationale as _applyMeasurement()'s _applying latch:
-        // the Pi sync below is a real await (up to 4000ms), and the guard-clearing
-        // side effects (_ticsTouchedSinceShow, addGal/addPrice/addGalL/addGalR) only
-        // run after it settles. Without this, a second RECORD tap before the first
-        // settles would sail past every other guard and append a duplicate
-        // flytab_fuel_stops entry, double-adding gallons to the Pi's authoritative total.
+    _recordFuelStop() {
+        // Defensive re-entrancy latch (see the constructor). This method has no await,
+        // so a second RECORD tap runs only after the first has finished; that tap is
+        // refused by the consumed-reading guard (_ticsTouchedSinceShow, cleared below),
+        // not by this latch.
         if (this._recording) return;
 
         const gallons = parseFloat(this._dom.addGal.value);
@@ -848,21 +809,29 @@ class FuelOverlay {
             // Reset tracked fuel from the tic-mark reading already entered above (§A),
             // exactly like _applyMeasurement() does — a fuel stop is always grounded in
             // a fresh physical measurement, never computed from "previous + added."
+            // The measurement record (tracked_gal, edm_gal) is taken before init()
+            // re-initialises the tracked state. It also goes into flypi_fuel_history with
+            // the pumped gallons (fuel_stop_gal), so the K-factor can count the leg that
+            // ends at this stop: actual used = previous tic − (this tic − gallons pumped).
+            // Graded against tracked + the gallons pumped (the tic is read after fuelling).
+            const m = this._createRecordedMeasurement(gallons);
             const leftGal = FuelEngine.ticToGallons(this._leftTic, this._coefficients);
             const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
             const existingTank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
             if (typeof FuelTankState !== 'undefined') {
                 FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L');
+                m.tank_init_at = FuelTankState.getState()?.initialized_at ?? null;
+            } else {
+                m.tank_init_at = null;
             }
-            const m = FuelEngine.createMeasurement(this._leftTic, this._rightTic, this._coefficients);
             FuelState.saveMeasurement(m);
+            this._syncMeasurement({ ...m, fuel_stop_gal: gallons });
             const newTotal = m.total_gal;
 
             window.dispatchEvent(new CustomEvent('fuelstate:changed'));
             this._updateSourceDisplay();
-
-            // Sync fuel stop to Pi — reported instead of swallowed (see _syncFuelSetToEngine).
-            const synced = await this._syncFuelAddToEngine(gallons, airport, price);
+            this._renderHistory();
+            this._renderKFactor();
 
             // The reading has been consumed. A second RECORD tap must be backed by its own
             // fresh measurement, not this one — otherwise a double tap (or a second stop
@@ -874,120 +843,16 @@ class FuelOverlay {
             this._dom.addPrice.value = '';
             if (this._dom.addGalL) this._dom.addGalL.value = '';
             if (this._dom.addGalR) this._dom.addGalR.value = '';
+            // The FUEL ADDED box is empty again: the comparison block goes back to plain
+            // TRACKED (now the re-initialised tank state).
+            this._updateTrackedComparison();
 
-            if (synced.ok) {
-                // This record's own sync landed — but don't clobber tracking of a
-                // DIFFERENT, still-unretried fuel stop's failure (single-slot, see
-                // constructor comment): only clear if nothing else is pending.
-                if (!this._lastFuelStopPending) this._fuelStopPiSyncFailed = false;
-                this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
-            } else {
-                // Local record already landed (flytab_fuel_stops + FuelTankState,
-                // above) — track exactly this stop so RECORD FUEL STOP can retry ONLY
-                // the Pi POST, never re-writing local state (Finding 1, 2026-09 audit).
-                this._fuelStopPiSyncFailed = true;
-                this._lastFuelStopPending = { gallons, airport, price, reason: synced.message };
-                this._setAddStatus(
-                    `Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total. ` +
-                    `Pi not yet updated (${synced.message}) No new reading needed — tap RECORD FUEL STOP again to resend this fuel stop to the Pi.`,
-                    'error');
-            }
-            this._refreshFuelStopButton();
+            this._setAddStatus(`Recorded: +${gallons.toFixed(1)} gal at ${airport || '—'} → ${newTotal.toFixed(1)} gal total`, 'ok');
         } catch (err) {
             this._setAddStatus(`Save failed: ${err.message}`, 'error');
         } finally {
             this._recording = false;
         }
-    }
-
-    /** Toggle the RECORD FUEL STOP button's label between its two purposes —
-     *  recording a new stop, or (when the last stop's Pi sync failed) retrying
-     *  just that sync. Mirrors _refreshDroppedBurnRow()'s APPLY/RETRY toggle. */
-    _refreshFuelStopButton() {
-        if (!this._dom.addRecord) return;
-        this._dom.addRecord.textContent =
-            (this._fuelStopPiSyncFailed && this._lastFuelStopPending) ? 'RETRY PI SYNC' : 'RECORD FUEL STOP';
-    }
-
-    /**
-     * Retry syncing the last-failed fuel stop to the Pi only — used when the local
-     * record already landed (flytab_fuel_stops + FuelTankState) but the earlier
-     * _syncFuelAddToEngine() call failed. Does NOT touch localStorage or
-     * FuelTankState again: doing so would append a second flytab_fuel_stops entry,
-     * and since the Pi's fuel total is additive, could double-add gallons if the
-     * original POST actually landed despite the client-side failure (e.g. a slow
-     * Pi that timed out at the JS side but still processed the request).
-     */
-    async _retryFuelStopPiSync() {
-        if (!this._lastFuelStopPending || this._recording) return;
-        this._recording = true;
-        if (this._dom.addRecord) this._dom.addRecord.disabled = true;
-        try {
-            const { gallons, airport, price } = this._lastFuelStopPending;
-            // The Pi's /api/fuel/add is additive with no duplicate check, so a
-            // first attempt that landed but answered after the 4 s timeout would
-            // be added twice by a blind resend. Look first.
-            const onPi = await this._fuelStopAlreadyOnPi(gallons, airport);
-            if (onPi === true) {
-                this._fuelStopPiSyncFailed = false;
-                this._lastFuelStopPending = null;
-                this._setAddStatus(
-                    `The Pi already has the +${gallons.toFixed(1)} gal fuel stop at ${airport || '—'} — not sent again.`,
-                    'ok');
-                return;
-            }
-            if (onPi === null) {
-                const reason = 'Could not check the Pi for this fuel stop.';
-                this._lastFuelStopPending = { gallons, airport, price, reason };
-                this._setAddStatus(`Retry not sent — ${reason} Tap RECORD FUEL STOP again when the Pi is reachable.`, 'error');
-                return;
-            }
-            const synced = await this._syncFuelAddToEngine(gallons, airport, price);
-            if (synced.ok) {
-                this._fuelStopPiSyncFailed = false;
-                this._lastFuelStopPending = null;
-                this._setAddStatus(
-                    `Pi sync succeeded — +${gallons.toFixed(1)} gal at ${airport || '—'} is now recorded on the Pi as well.`,
-                    'ok');
-            } else {
-                this._lastFuelStopPending = { gallons, airport, price, reason: synced.message };
-                this._setAddStatus(`Retry failed — ${synced.message} Tap RECORD FUEL STOP again to retry.`, 'error');
-            }
-        } finally {
-            this._recording = false;
-            if (this._dom.addRecord) this._dom.addRecord.disabled = false;
-            this._refreshFuelStopButton();
-        }
-    }
-
-    /**
-     * Whether the Pi's most recent fuel addition is this stop (same airport and
-     * gallons): true / false, or null if the Pi's history can't be read. Only the
-     * latest entry is compared. If an earlier identical stop happens to be the
-     * latest, the resend is skipped and the Pi under-counts by one stop -- the
-     * conservative direction, unlike a double add.
-     * @returns {Promise<boolean|null>}
-     */
-    async _fuelStopAlreadyOnPi(gallons, airport) {
-        const base = this._engineBaseUrl();
-        if (!base) return null;
-        try {
-            const resp = await fetch(`${base}/api/fuel/history`, { signal: AbortSignal.timeout(4000) });
-            if (!resp.ok) return null;
-            const data = await resp.json();
-            const additions = Array.isArray(data?.fuel_additions) ? data.fuel_additions : null;
-            if (!additions) return null;
-            const last = additions[additions.length - 1];
-            if (!last) return false;
-            return String(last.airport || '') === String(airport || '').toUpperCase()
-                && Math.abs(Number(last.gallons) - gallons) < 0.06;
-        } catch (_) {
-            return null;
-        }
-    }
-
-    _engineBaseUrl() {
-        return EngineClient.baseUrl();
     }
 
     /** Sane ceiling for a single dropped-burn correction: a full tank's worth,
@@ -999,7 +864,7 @@ class FuelOverlay {
 
     /**
      * Apply a pilot-confirmed (or edited) dropped-burn correction to FlyTab's own
-     * FuelTankState, then sync the Pi's independent FuelTracker separately.
+     * FuelTankState. The tablet is the only fuel record; nothing is sent to the Pi.
      */
     async _applyDroppedBurnCorrection() {
         const gallons = parseFloat(this._dom.droppedBurnInput.value);
@@ -1036,138 +901,14 @@ class FuelOverlay {
                     'Could not apply — tank state needs confirmation. Confirm tank selection, then retry.', 'error');
                 return;
             }
-            await this._syncDroppedBurnToPi();
+            this._setDroppedBurnStatus(`Applied ${gallons.toFixed(1)} gal correction`, 'ok');
         } finally {
             this._dom.droppedBurnApply.disabled = false;
             this._refreshDroppedBurnRow();
-        }
-    }
-
-    /** Retry syncing to the Pi only — used when the local correction already
-     *  landed but the earlier Pi sync attempt failed. Does not touch FuelTankState
-     *  again (that would double-subtract from the tank). */
-    async _retryPiDroppedBurnSync() {
-        this._dom.droppedBurnApply.disabled = true;
-        try {
-            await this._syncDroppedBurnToPi();
-        } finally {
-            this._dom.droppedBurnApply.disabled = false;
-            this._refreshDroppedBurnRow();
-        }
-    }
-
-    /**
-     * Tell the Pi to apply ITS OWN tracked dropped_burn_estimate_gal (the server
-     * ignores any amount from the client — see the /api/fuel/apply_dropped_burn
-     * handler comment: FlyTab's estimate is a different quantity from a different
-     * sample stream and must not be pushed onto the Pi's tracker). Unlike
-     * _syncFuelSetToEngine()/_syncFuelAddToEngine(), failure here is reported to
-     * the pilot instead of swallowed, and sets _piSyncFailed so the row stays up
-     * as a retry affordance rather than silently going stale.
-     */
-    async _syncDroppedBurnToPi() {
-        const base = this._engineBaseUrl();
-        if (!base) {
-            this._piSyncFailed = true;
-            this._setDroppedBurnStatus(
-                'Applied locally — Pi unreachable, engine-side total NOT corrected. Retry when back in range.', 'error');
-            return;
-        }
-        try {
-            const resp = await fetch(`${base}/api/fuel/apply_dropped_burn`, {
-                method: 'POST',
-                signal: AbortSignal.timeout(4000),
-            });
-            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            let result;
-            try {
-                result = await resp.json();
-            } catch (parseErr) {
-                // The Pi's endpoint ran (200 OK, and it applies under a single lock
-                // acquisition — see engine_monitor.py's apply_own_dropped_burn()), so
-                // the correction almost certainly landed. But we can't confirm the
-                // amount, so this must NOT collapse into the same reassuring message
-                // as a verified success (PR #143 review) — flag it and offer a retry.
-                this._piSyncFailed = true;
-                this._setDroppedBurnStatus(
-                    'Pi accepted the correction but its response could not be read — verify the Pi\'s own fuel display, or retry.', 'error');
-                return;
-            }
-            this._piSyncFailed = false;
-            const appliedGal = result?.applied_gal;
-            this._setDroppedBurnStatus(
-                appliedGal != null
-                    ? `Applied locally; Pi applied its own ${appliedGal.toFixed(1)} gal estimate`
-                    : 'Applied to both trackers', 'ok');
-        } catch (err) {
-            this._piSyncFailed = true;
-            this._setDroppedBurnStatus(
-                `Applied locally — Pi sync failed (${err.message}). Retry when back in range.`, 'error');
         }
     }
 
     _setDroppedBurnStatus(msg, type) { this._setStatus(this._dom.droppedBurnStatus, msg, type); }
-
-    // The Pi POSTs in this file (/api/fuel/set, /api/fuel/add,
-    // /api/fuel/calibration/applied) must not set Content-Type. Setting it to
-    // application/json makes the request non-simple, so the WebView first sends
-    // a CORS preflight (OPTIONS) that engine_monitor.py has no handler for --
-    // the preflight fails and the POST never goes out ("Failed to fetch").
-    // Without the header fetch sends the CORS-safelisted text/plain, which the
-    // Pi's json.loads(body) parses fine. Same fix as _setAtis in engine-page.js.
-    /**
-     * Push the pilot-confirmed tic measurement to the Pi as its new authoritative
-     * fuel_remaining. Returns {ok, message} instead of swallowing the outcome — a
-     * failed sync here leaves the Pi's own fuel total silently diverged from what
-     * FlyTab now shows, the same risk fixed for the dropped-burn correction's Pi
-     * sync in PR #143.
-     * @returns {Promise<{ok: boolean, message: string}>}
-     */
-    async _syncFuelSetToEngine(gallons, reason = '') {
-        const base = this._engineBaseUrl();
-        if (!base) {
-            return { ok: false, message: 'Measurement saved locally — Pi unreachable, engine-side total NOT updated. Retry when back in range.' };
-        }
-        try {
-            const resp = await fetch(`${base}/api/fuel/set`, {
-                method: 'POST',
-                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _syncFuelSetToEngine).
-                body: JSON.stringify({ fuel_remaining: gallons, reason }),
-                signal: AbortSignal.timeout(4000),
-            });
-            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            return { ok: true, message: '' };
-        } catch (err) {
-            return { ok: false, message: `Measurement saved locally — Pi sync failed (${err.message}). Retry when back in range.` };
-        }
-    }
-
-    /**
-     * Push a recorded fuel stop to the Pi's own fuel-addition log. Returns
-     * {ok, message} — same rationale as _syncFuelSetToEngine().
-     * @returns {Promise<{ok: boolean, message: string}>}
-     */
-    async _syncFuelAddToEngine(gallons, airport = '', price = null) {
-        const base = this._engineBaseUrl();
-        if (!base) {
-            return { ok: false, message: 'Fuel stop saved locally — Pi unreachable, engine-side total NOT updated. Retry when back in range.' };
-        }
-        const body = { gallons };
-        if (airport) body.airport = airport;
-        if (price != null) body.price_per_gallon = price;
-        try {
-            const resp = await fetch(`${base}/api/fuel/add`, {
-                method: 'POST',
-                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _syncFuelSetToEngine).
-                body: JSON.stringify(body),
-                signal: AbortSignal.timeout(4000),
-            });
-            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            return { ok: true, message: '' };
-        } catch (err) {
-            return { ok: false, message: `Fuel stop saved locally — Pi sync failed (${err.message}). Retry when back in range.` };
-        }
-    }
 
     _setAddStatus(msg, type) { this._setStatus(this._dom.addStatus, msg, type); }
 
@@ -1211,14 +952,20 @@ class FuelOverlay {
             const dt = m.measured_at ? new Date(m.measured_at) : (m.ts ? new Date(m.ts) : null);
             const dateStr = dt ? this._fmtDate(dt) : '--';
             const tic = m.total_gal != null ? m.total_gal.toFixed(1) : '--';
-            const edm = m.edm_gal  != null ? m.edm_gal.toFixed(1)   : '--';
+            const ref = this._historyRefField(m);
+            const trk = Number.isFinite(m[ref]) ? m[ref].toFixed(1) : '--';
+
+            const stopGal = Number(m.fuel_stop_gal);
+            const stopTag = (Number.isFinite(stopGal) && stopGal > 0)
+                ? `<div class="fo-hist-stop">FUEL STOP +${stopGal.toFixed(1)} gal</div>` : '';
 
             const tr = document.createElement('tr');
             tr.dataset.origIdx = origIdx;
+            if (stopTag) tr.classList.add('fo-hist-row-stop');
             tr.innerHTML = `
-                <td>${dateStr}</td>
+                <td>${dateStr}${stopTag}</td>
                 <td>${tic}</td>
-                <td>${edm}</td>
+                <td>${trk}</td>
                 <td class="fo-hist-actions">
                     <button class="fo-hist-btn fo-hist-edit" title="Edit">✎</button>
                     <button class="fo-hist-btn fo-hist-del" title="Delete">✕</button>
@@ -1249,7 +996,8 @@ class FuelOverlay {
         if (!m) return;
 
         const ticVal = m.total_gal != null ? m.total_gal.toFixed(1) : '';
-        const edmVal = m.edm_gal  != null ? m.edm_gal.toFixed(1)   : '';
+        const ref = this._historyRefField(m);
+        const trkVal = Number.isFinite(m[ref]) ? m[ref].toFixed(1) : '';
 
         // Replace row with edit inputs
         tr.innerHTML = `
@@ -1257,9 +1005,9 @@ class FuelOverlay {
                 <label class="fo-hist-edit-label">TIC</label>
                 <input type="number" class="fo-hist-edit-input" id="fo-hist-tic-${origIdx}"
                        value="${ticVal}" min="0" max="100" step="0.1">
-                <label class="fo-hist-edit-label">EDM</label>
-                <input type="number" class="fo-hist-edit-input" id="fo-hist-edm-${origIdx}"
-                       value="${edmVal}" min="0" max="100" step="0.1">
+                <label class="fo-hist-edit-label">TRACKED</label>
+                <input type="number" class="fo-hist-edit-input" id="fo-hist-tracked-${origIdx}"
+                       value="${trkVal}" min="0" max="100" step="0.1">
             </td>
             <td colspan="2" class="fo-hist-actions">
                 <button class="fo-hist-btn fo-hist-save">✔</button>
@@ -1268,9 +1016,15 @@ class FuelOverlay {
 
         wireTap(tr.querySelector('.fo-hist-save'), () => {
             const newTic = parseFloat(tr.querySelector(`#fo-hist-tic-${origIdx}`).value);
-            const newEdm = parseFloat(tr.querySelector(`#fo-hist-edm-${origIdx}`).value);
+            const newTrk = parseFloat(tr.querySelector(`#fo-hist-tracked-${origIdx}`).value);
             if (!isNaN(newTic)) m.total_gal = newTic;
-            if (!isNaN(newEdm)) m.edm_gal = newEdm;
+            if (!isNaN(newTrk)) {
+                // A corrected TRACKED figure must reach the K-factor, which otherwise
+                // prefers the recorded flow burn: drop that so the leg falls back to
+                // previous tic − TRACKED.
+                if (trkVal === '' || newTrk !== parseFloat(trkVal)) delete m.flow_burn_since_init_gal;
+                m[ref] = newTrk;
+            }
             history[origIdx] = m;
             this._saveHistory(history);
             this._renderHistory();
@@ -1279,6 +1033,15 @@ class FuelOverlay {
         wireTap(tr.querySelector('.fo-hist-cancel'), () => {
             this._renderHistory();
         });
+    }
+
+    /** The comparison figure a history entry carries. Entries saved since the tablet
+     *  became the fuel source always have a tracked_gal key (null when nothing was
+     *  tracked); older entries have no such key and carry edm_gal (the engine-data
+     *  fuel figure at the time). Told apart by key presence, so a new entry with
+     *  tracked_gal: null never falls back to its D-180 edm_gal. */
+    _historyRefField(m) {
+        return (m && typeof m === 'object' && 'tracked_gal' in m) ? 'tracked_gal' : 'edm_gal';
     }
 
     _fmtDate(dt) {
@@ -1291,132 +1054,174 @@ class FuelOverlay {
         return `${mo}/${day} ${hr12}:${mn}${ampm}`;
     }
 
+    /**
+     * K-factor check from consecutive history entries (prev, next), sorted by time:
+     *   actual used  = prev.total_gal − (next.total_gal − next.fuel_stop_gal)
+     *   tracked used = next.flow_burn_since_init_gal: the fuel-flow burn since the init
+     *                  prev created (counts burn charged to a tank already at 0, which
+     *                  the tank total cannot show; an applied dropped-burn correction
+     *                  is an estimate and is not in it). Records without that field
+     *                  (saved before it existed, or with TRACKED edited by hand) fall
+     *                  back to prev.total_gal − next.tracked_gal −
+     *                  next.dropped_applied_since_init_gal.
+     * fuel_stop_gal is 0 for an APPLY TIC entry. Each leg is counted or excluded, in
+     * this order (the first rule that applies names the exclusion):
+     *   older      — next has no tracked_since key, prev no tank_init_at key (saved
+     *                before these checks), or a LEGACY fuel stop (a flytab_fuel_stops
+     *                record with no matching history entry) lies between them
+     *   unusable   — a figure is missing / not finite (incl. nothing tracked)
+     *   reset      — next.tracked_since is not the init prev created (prev.tank_init_at):
+     *                the tracker was SET / CONFIRMed in between
+     *   unconfirmed — next's tracked figure was stale (next.tracked_stale)
+     *   unusable   — actual or tracked used is not positive (e.g. the tic rose with no
+     *                fuel stop recorded)
+     *   outlier    — |ratio ÷ centre − 1| > KF_OUTLIER_FRAC over the candidate legs
+     *                (legs that passed every rule above). The centre is 1.0, or the
+     *                median ratio when it can be trusted (see KF_OUTLIER_FRAC). E.g.
+     *                a partial top-off recorded with APPLY TIC instead of RECORD
+     *                FUEL STOP.
+     * Ratio = Σtracked ÷ Σactual over counted legs. Dynon's rule (FlightDEK-D180
+     * Installation Guide p. 6-14: "if your GALS USED reads higher than you expect,
+     * increase the K-factor"), so New K = Current K × Ratio.
+     * @returns {{actual: number, tracked: number, pairs: number,
+     *            excluded: {older: number, unusable: number, reset: number, unconfirmed: number, outlier: number}}}
+     */
+    _computeKFactor() {
+        const toMs = (v) => {
+            if (v == null || v === '') return null;
+            const t = new Date(v).getTime();
+            return Number.isFinite(t) ? t : null;
+        };
+        let history = this._loadHistory();
+        if (!Array.isArray(history)) history = [];
+        let stops = [];
+        try { stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]'); } catch (_) { /* */ }
+        if (!Array.isArray(stops)) stops = [];
+
+        const entries = history.filter(m => m && typeof m === 'object').map(m => {
+            const stopGal = Number(m.fuel_stop_gal);
+            const dropped = Number(m.dropped_applied_since_init_gal);
+            const flow = (m.flow_burn_since_init_gal == null) ? NaN : Number(m.flow_burn_since_init_gal);
+            return {
+                ts: toMs(m.measured_at) ?? (Number.isFinite(m.ts) ? m.ts : 0),
+                tic: m.total_gal,
+                ref: m[this._historyRefField(m)],
+                stopGal: Number.isFinite(stopGal) && stopGal > 0 ? stopGal : 0,
+                isStop: m.fuel_stop_gal != null,
+                hasSince: 'tracked_since' in m,
+                since: m.tracked_since ?? null,
+                hasInit: 'tank_init_at' in m,
+                initAt: m.tank_init_at ?? null,
+                stale: m.tracked_stale === true,
+                dropped: Number.isFinite(dropped) && dropped > 0 ? dropped : 0,
+                flowBurn: Number.isFinite(flow) ? flow : null,
+            };
+        }).sort((a, b) => a.ts - b.ts);
+
+        // A stop recorded with this version wrote a history entry in the same call
+        // (timestamps milliseconds apart). Allow a few seconds for that match.
+        const MATCH_MS = 5000;
+        const stopEntryTimes = entries.filter(e => e.isStop).map(e => e.ts);
+        const legacyStopTimes = [];
+        for (const st of stops) {
+            const t = toMs(st?.saved_at) ?? (st?.date ? toMs(`${st.date}T${st.time || '00:00'}`) : null);
+            if (t == null) continue;
+            if (!stopEntryTimes.some(e => Math.abs(e - t) <= MATCH_MS)) legacyStopTimes.push(t);
+        }
+
+        const excluded = { older: 0, unusable: 0, reset: 0, unconfirmed: 0, outlier: 0 };
+        const candidates = [];
+        for (let i = 1; i < entries.length; i++) {
+            const prev = entries[i - 1];
+            const next = entries[i];
+            if (!next.hasSince || !prev.hasInit ||
+                legacyStopTimes.some(st => st > prev.ts && st < next.ts)) { excluded.older++; continue; }
+            if (!Number.isFinite(prev.tic) || !Number.isFinite(next.tic) || !Number.isFinite(next.ref)) {
+                excluded.unusable++; continue;
+            }
+            if (prev.initAt == null || next.since !== prev.initAt) { excluded.reset++; continue; }
+            if (next.stale) { excluded.unconfirmed++; continue; }
+            const a = prev.tic - (next.tic - next.stopGal);
+            const t = next.flowBurn != null ? next.flowBurn : prev.tic - next.ref - next.dropped;
+            if (!(a > 0) || !(t > 0)) { excluded.unusable++; continue; }
+            candidates.push({ a, t, r: t / a });
+        }
+
+        const F = FuelOverlay.KF_OUTLIER_FRAC;
+        let center = 1;
+        if (candidates.length >= FuelOverlay.KF_MEDIAN_MIN_LEGS) {
+            const rs = candidates.map(c => c.r).sort((x, y) => x - y);
+            const mid = Math.floor(rs.length / 2);
+            const median = rs.length % 2 ? rs[mid] : (rs[mid - 1] + rs[mid]) / 2;
+            const near = rs.filter(r => Math.abs(r / median - 1) <= F).length;
+            const trusted = Math.abs(median - 1) <= F ||
+                (rs.length >= FuelOverlay.KF_MEDIAN_SHIFT_MIN_LEGS &&
+                 near / rs.length >= FuelOverlay.KF_MEDIAN_SHIFT_AGREE);
+            if (trusted) center = median;
+        }
+        let actual = 0, tracked = 0, pairs = 0;
+        for (const c of candidates) {
+            if (Math.abs(c.r / center - 1) > F) { excluded.outlier++; continue; }
+            actual += c.a;
+            tracked += c.t;
+            pairs++;
+        }
+        return { actual, tracked, pairs, excluded };
+    }
+
+    /** "N legs excluded: …" for the K-factor panel, or '' when none were. */
+    _kFactorExcludedText(excluded) {
+        const parts = [
+            [excluded.reset, 'tracker reset', 'tracker resets'],
+            [excluded.unconfirmed, 'unconfirmed', 'unconfirmed'],
+            [excluded.outlier, `more than ${Math.round(FuelOverlay.KF_OUTLIER_FRAC * 100)}% off`,
+                `more than ${Math.round(FuelOverlay.KF_OUTLIER_FRAC * 100)}% off`],
+            [excluded.unusable, 'unusable reading', 'unusable readings'],
+            [excluded.older, 'recorded before this check', 'recorded before this check'],
+        ].filter(([n]) => n > 0);
+        const total = parts.reduce((sum, [n]) => sum + n, 0);
+        if (total === 0) return '';
+        return `${total} ${total === 1 ? 'leg' : 'legs'} excluded: ` +
+            parts.map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(', ');
+    }
+
     _renderKFactor() {
         if (!this._dom.kfFilled) return;
+        const { actual, tracked, pairs, excluded } = this._computeKFactor();
 
-        // Total fuel filled from recorded fuel stops
-        let totalFilled = 0;
-        try {
-            const stops = JSON.parse(localStorage.getItem('flytab_fuel_stops') || '[]');
-            totalFilled = stops.reduce((sum, s) => sum + (parseFloat(s.gallons) || 0), 0);
-        } catch (_) { /* */ }
+        this._dom.kfFilled.textContent = pairs > 0 ? actual.toFixed(1) + ' gal' : '-- gal';
+        this._dom.kfUsed.textContent = pairs > 0 ? tracked.toFixed(1) + ' gal' : '-- gal';
 
-        // Total EDM-computed fuel used: sum of drops between consecutive measurements with edm_gal
-        let totalUsed = 0;
-        try {
-            const history = JSON.parse(localStorage.getItem('flypi_fuel_history') || '[]');
-            const edmEntries = history.filter(m => m.edm_gal > 0).map(m => ({
-                ts: m.measured_at ? new Date(m.measured_at).getTime() : (m.ts || 0),
-                edm: m.edm_gal,
-                tic: m.total_gal || 0,
-            })).sort((a, b) => a.ts - b.ts);
-
-            for (let i = 1; i < edmEntries.length; i++) {
-                const edmDrop = edmEntries[i - 1].edm - edmEntries[i].edm;
-                const ticDrop = edmEntries[i - 1].tic - edmEntries[i].tic;
-                // Require EDM decreased and tic didn't increase — filters out post-refuel
-                // entries where tic increases (fuel added) but EDM still shows the stale
-                // pre-refuel value, which would produce a false "fuel used" reading.
-                // ticDrop === 0 is kept: the tic scale is quantized to 0.5 gal steps and
-                // can legitimately read flat between two close measurements while EDM
-                // shows real consumption.
-                if (edmDrop > 0 && ticDrop >= 0) totalUsed += edmDrop;
-            }
-        } catch (_) { /* */ }
-
-        if (totalFilled > 0) {
-            this._dom.kfFilled.textContent = totalFilled.toFixed(1) + ' gal';
-        } else {
-            this._dom.kfFilled.textContent = '-- gal';
+        if (this._dom.kfExcluded) {
+            const txt = this._kFactorExcludedText(excluded);
+            this._dom.kfExcluded.textContent = txt;
+            this._dom.kfExcluded.style.display = txt ? '' : 'none';
         }
 
-        if (totalUsed > 0) {
-            this._dom.kfUsed.textContent = totalUsed.toFixed(1) + ' gal';
-        } else {
-            this._dom.kfUsed.textContent = '-- gal';
-        }
-
-        if (totalFilled > 0 && totalUsed > 0) {
-            const ratio = totalFilled / totalUsed;
+        if (pairs > 0) {
+            const ratio = tracked / actual;
             this._dom.kfRatio.textContent = ratio.toFixed(3);
             // Color-code: green near 1.0, yellow if off by 5%, red if off by 10%
             const dev = Math.abs(ratio - 1.0);
             this._dom.kfRatio.className = 'fo-kfactor-val fo-kfactor-ratio ' +
                 (dev < 0.05 ? 'fo-kf-good' : dev < 0.10 ? 'fo-kf-warn' : 'fo-kf-bad');
-            this._dom.kfGuidance.textContent =
-                `New K-Factor = Current K-Factor × ${ratio.toFixed(3)}` +
-                (ratio > 1.0 ? '  (increase K-factor — EDM reads low)' : ratio < 1.0 ? '  (decrease K-factor — EDM reads high)' : '  (K-factor accurate)');
+            // Compare with the displayed (0.1 gal) figure so the text and the number agree.
+            if (Math.round(actual * 10) / 10 < FuelOverlay.KF_MIN_ACTUAL_GAL) {
+                this._dom.kfGuidance.textContent =
+                    `Ratio for reference only — needs more data (${actual.toFixed(1)} of ` +
+                    `${FuelOverlay.KF_MIN_ACTUAL_GAL} gal) before changing the K-factor`;
+            } else {
+                this._dom.kfGuidance.textContent =
+                    `New K-Factor = Current K-Factor × ${ratio.toFixed(3)}` +
+                    (ratio > 1.0 ? '  (increase K-factor — tracked burn higher than actual)'
+                        : ratio < 1.0 ? '  (decrease K-factor — tracked burn lower than actual)'
+                        : '  (K-factor accurate)');
+            }
         } else {
             this._dom.kfRatio.textContent = '--';
             this._dom.kfRatio.className = 'fo-kfactor-val fo-kfactor-ratio';
-            this._dom.kfGuidance.textContent = totalFilled > 0
-                ? 'Record more tic measurements with EDM data to compute ratio.'
-                : 'Record fuel stops to compute ratio.';
-        }
-    }
-
-    /** Best-effort read of the Pi's own K-factor calibration status. Passive
-     *  display refresh, same non-blocking pattern as _resolveEdmFuel() in
-     *  show() — on failure, leaves the panel hidden rather than showing stale
-     *  or fabricated numbers. */
-    async _fetchPiCalibration() {
-        const base = this._engineBaseUrl();
-        if (!base || !this._dom.kfPiSection) { if (this._dom.kfPiSection) this._dom.kfPiSection.style.display = 'none'; return; }
-        try {
-            const resp = await fetch(`${base}/api/fuel/calibration`, { signal: AbortSignal.timeout(4000) });
-            if (!resp.ok) throw new Error(`Pi returned ${resp.status}`);
-            const status = await resp.json();
-            this._renderPiKFactor(status);
-        } catch (_) {
-            this._dom.kfPiSection.style.display = 'none';
-        }
-    }
-
-    _renderPiKFactor(status) {
-        this._piCalibration = status;
-        this._dom.kfPiSection.style.display = '';
-        this._dom.kfPiCurrent.textContent = status.current_k_factor != null ? String(status.current_k_factor) : '--';
-        if (status.ready) {
-            this._dom.kfPiSuggested.textContent = String(status.suggested_k_factor);
-            this._dom.kfPiRecommendation.textContent = status.recommendation || '';
-            this._dom.kfPiApply.style.display = '';
-        } else {
-            this._dom.kfPiSuggested.textContent = '--';
-            this._dom.kfPiRecommendation.textContent = status.message || '';
-            this._dom.kfPiApply.style.display = 'none';
-        }
-    }
-
-    /** Record the Pi's own suggested K-factor as applied (POST — the Pi does
-     *  not re-program the physical sensor; this is a log entry the pilot
-     *  confirms after manually setting the new K-factor on the Dynon EMS). */
-    async _applyPiKFactor() {
-        if (!this._piCalibration?.ready) return;
-        const newK = this._piCalibration.suggested_k_factor;
-        const base = this._engineBaseUrl();
-        if (!base) {
-            this._setStatus(this._dom.kfPiStatus, 'Pi unreachable — cannot record applied K-factor', 'error');
-            return;
-        }
-        this._dom.kfPiApply.disabled = true;
-        try {
-            const resp = await fetch(`${base}/api/fuel/calibration/applied`, {
-                method: 'POST',
-                // No Content-Type -- it forces a CORS preflight the Pi can't answer (see the note above _syncFuelSetToEngine).
-                body: JSON.stringify({ new_k_factor: newK }),
-                signal: AbortSignal.timeout(4000),
-            });
-            const result = await resp.json().catch(() => ({}));
-            if (resp.ok && result.success) {
-                this._setStatus(this._dom.kfPiStatus, result.message || `K-factor ${newK} recorded as applied`, 'ok');
-                await this._fetchPiCalibration();
-            } else {
-                this._setStatus(this._dom.kfPiStatus, result.error || `Pi returned ${resp.status}`, 'error');
-            }
-        } catch (err) {
-            this._setStatus(this._dom.kfPiStatus, `Pi sync failed (${err.message})`, 'error');
-        } finally {
-            this._dom.kfPiApply.disabled = false;
+            this._dom.kfGuidance.textContent =
+                'Record a tic measurement (APPLY TIC or RECORD FUEL STOP) at the start and end of a leg flown with fuel tracked to compute ratio.';
         }
     }
 

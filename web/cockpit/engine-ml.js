@@ -5,6 +5,15 @@
  */
 
 class EngineMLBridge {
+    /** FuelState.measuredGallons() gallons, or 0 when null or stale. */
+    static _measuredFuelGal() {
+        try {
+            const m = (typeof FuelState !== 'undefined' && typeof FuelState.measuredGallons === 'function')
+                ? FuelState.measuredGallons() : null;
+            return (m && !m.stale) ? m.gallons : 0;
+        } catch (_) { return 0; }
+    }
+
     /** Samples further apart than this are not compared (frames come at 1 Hz, or every 2 s on HTTP fallback). */
     static MAX_SAMPLE_GAP_MS = 5000;
 
@@ -241,7 +250,7 @@ class EngineMLBridge {
                     altitude:       num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft, 3000),
                     mp:             fakeFrame.manifold_pressure,
                     carb_temp:      num(d.carb_temp ?? d.Carb_Temp, 40),
-                    fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem, 20),
+                    fuel_remaining: num(EngineMLBridge._measuredFuelGal(), 20),
                     ground_speed:   num(sit?.ground_speed, 100),
                     distance_nm:    0,
                     phase:          (this._lastComputedPhase && this._lastComputedPhase !== 'shutdown') ? this._lastComputedPhase : (this._flightPhase ?? 'cruise'),
@@ -387,7 +396,10 @@ class EngineMLBridge {
                 altitude: num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft ?? 0),
                 mp: num(d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
                 carb_temp: num(d.carb_temp ?? d.Carb_Temp ?? 0),
-                fuel_remaining: num(d.fuel_remaining_gal ?? d.fuel_gal ?? d.Gallons_Rem ?? 0),
+                // Tablet fuel (FuelState.measuredGallons): 0 when only the capacity
+                // default is known or the tracked figure is stale (UNCONFIRMED, reads
+                // high). The Pi tracker figure is never used.
+                fuel_remaining: num(EngineMLBridge._measuredFuelGal()),
                 ground_speed: num(sit?.ground_speed ?? d.ground_speed ?? d.speed_kts ?? 0),
                 distance_nm: 0, // TODO: compute from route
                 phase,

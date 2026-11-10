@@ -22,8 +22,8 @@ function makeFrame() {
   const gallons = parseFloat(Math.max(0, 24.9 - t / 3600 * ff).toFixed(1));
   return {
     version:              '3.4.0',
-    api_contract:          2,
-    capabilities:         ['fuel_tracker', 'sticky_valve', 'peak_egt'],
+    api_contract:          3,
+    capabilities:         ['sticky_valve', 'peak_egt'],
     capturing:            true,
     serial_connected:     true,
     stratux_connected:    false,
@@ -44,7 +44,6 @@ function makeFrame() {
     peaks_valid:          false,
     manual_altimeter:     null,
     manual_oat:           null,
-    fuel:                 null,
     data: {
       RPM:        rpm,
       MP:         parseFloat((24.5 + Math.cos(t / 25) * 0.5).toFixed(1)),
@@ -54,7 +53,7 @@ function makeFrame() {
       Volts:      13.7,
       Amps:       34,
       Fuel_Flow:  ff,
-      Gallons_Rem: gallons,
+      Fuel_Remaining: gallons,   // the Pi's real field name (engine_monitor.py parse_line)
       Fuel_L1:    parseFloat((gallons * 0.55).toFixed(1)),
       Fuel_L2:    parseFloat((gallons * 0.45).toFixed(1)),
       EGT1: Math.round(1350 + Math.sin(t / 20) * 30),

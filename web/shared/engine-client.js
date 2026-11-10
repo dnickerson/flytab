@@ -78,7 +78,7 @@ class EngineClient extends EventTarget {
     // Bump alongside any code change that depends on a new/changed field name,
     // nesting, unit, or shared physical constant published by engine_monitor.py's
     // PI_API_CONTRACT. Not the app version — this is what the two sides compare.
-    static MIN_PI_CONTRACT = 2;
+    static MIN_PI_CONTRACT = 3;  // 3: the Pi fuel tracker was removed (status block + fuel endpoints)
 
     constructor(ip = '192.168.10.1', port = 8082, httpPort = 8080) {
         super();

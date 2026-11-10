@@ -71,14 +71,9 @@ beforeEach(() => {
             return undefined;
         },
     };
-    // The flight-CSV EDM lookup (_resolveEdmFuel(), localhost:9090) stays offline —
-    // these guard tests don't exercise EDM resolution and rely on it resolving to
-    // null. The Pi fuel-sync endpoint (fuel-overlay.js's _syncFuelSetToEngine) is
-    // mocked reachable-and-successful instead: since Pi-sync outcome is now
-    // surfaced (rather than swallowed — see fuel-overlay-set-add-sync.test.js for
-    // the outcome-reporting contract itself), a real "offline" mock here would
-    // make every guard-accepted reading also report a Pi-sync failure and stay
-    // open, which is not what these tests are checking.
+    // The overlay makes no network request (no Pi fuel sync, no flight-CSV lookup);
+    // fetch is stubbed only so an accidental call cannot reach a real host.
+    // window.enginePanel is unset, so the D-180 figure resolves to null.
     window.engineClient = { ip: '192.168.1.50' };
     realFetch = globalThis.fetch;
     globalThis.fetch = (url) => (typeof url === 'string' && url.includes('localhost:9090'))
@@ -116,7 +111,7 @@ const drag = (el, tic) => { el.value = String(tic); el.dispatchEvent(new window.
 const tap  = (id) => overlay._el.querySelector('#' + id)
     .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
-/** APPLY is async (_resolveEdmFuel). Let its promise chain settle. */
+/** APPLY is synchronous; the short wait is harmless and keeps the helper uniform. */
 const applyAndSettle = async () => { tap('fo-apply'); await new Promise(r => setTimeout(r, 20)); };
 
 /** The canonical tank state every fuel display on this branch reads. */
@@ -341,12 +336,12 @@ describe('structural contract with app.js', () => {
     it('_applyMeasurement gates on _requireFreshTics && !_ticsTouchedSinceShow', () => {
         const applyBody = FUEL_OVERLAY_SRC.slice(
             FUEL_OVERLAY_SRC.indexOf('    _applyMeasurement() {'),
-            FUEL_OVERLAY_SRC.indexOf('    async _resolveEdmFuel()'));
+            FUEL_OVERLAY_SRC.indexOf('    _createRecordedMeasurement() {'));
         expect(applyBody).toMatch(/this\._requireFreshTics && !this\._ticsTouchedSinceShow/);
-        // Before the write path: the guard must sit above the async resolve that performs
-        // saveMeasurement() / FuelTankState.init(), or state is mutated then "refused".
+        // Before the write path: the guard must sit above saveMeasurement() /
+        // FuelTankState.init(), or state is mutated then "refused".
         expect(applyBody.indexOf('this._requireFreshTics'))
-            .toBeLessThan(applyBody.indexOf('_resolveEdmFuel()'));
+            .toBeLessThan(applyBody.indexOf('FuelState.saveMeasurement('));
         // …and above the re-entrancy latch, so a refusal cannot wedge it.
         expect(applyBody.indexOf('this._requireFreshTics'))
             .toBeLessThan(applyBody.indexOf('this._applying = true'));

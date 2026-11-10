@@ -168,13 +168,11 @@ class EnginePage {
             <div class="ep-section-title">FUEL STATUS</div>
             <div class="ep-section ep-fuel-row">
                 ${this._gaugeHtml('ep-fuel-rem',  'REMAINING',   '--.-', 'GAL')}
-                ${this._gaugeHtml('ep-fuel-used', 'USED (FLIGHT)','--.-','GAL')}
+                ${this._gaugeHtml('ep-fuel-used', 'USED','--.-','GAL')}
                 ${this._gaugeHtml('ep-fuel-end',  'ENDURANCE',   '-:--', 'H:MM')}
                 ${this._gaugeHtml('ep-fuel-rng',  'RANGE',       '---',  'NM')}
             </div>
-            <div class="ep-fuel-stale" id="ep-fuel-stale" style="display:none;">
-                UNCONFIRMED &mdash; TANK STATE NOT UPDATED IN 45+ MIN. REMAINING MAY READ HIGH; CONFIRM FUEL.
-            </div>
+            <div class="ep-fuel-stale" id="ep-fuel-stale" style="display:none;">${EnginePage.FUEL_STALE_TEXT}</div>
             <div class="ep-tank-source-note">LEFT/RIGHT below are raw EDM sender readings, not the tracked figure above.</div>
             <div class="ep-fuel-tanks">
                 <div class="ep-tank">
@@ -193,11 +191,13 @@ class EnginePage {
                 <span class="ep-fuel-bar-label" id="ep-fuel-bar-label">--% (--/-- gal)</span>
             </div>
 
-            <!-- TIC vs EDM variance row -->
+            <!-- TRACKED vs D-180 row: live tracked fuel (FuelTankState) against the
+                 D-180 EMS fuel computer (field 12), current frames only -->
             <div class="ep-tic-edm-row" id="ep-tic-edm-row" style="display:none;">
-                <span class="ep-tic-edm-label">TIC vs EDM</span>
-                <span class="ep-tic-edm-item">TIC: <span id="ep-tic-total">--</span></span>
-                <span class="ep-tic-edm-item">EDM: <span id="ep-edm-total">--</span></span>
+                <span class="ep-tic-edm-label">TRACKED vs D-180</span>
+                <span class="ep-tic-edm-item">TRACKED: <span id="ep-trk-total">--</span></span>
+                <span class="ep-trk-unconf" id="ep-trk-unconf" style="display:none;">UNCONFIRMED</span>
+                <span class="ep-tic-edm-item">D-180: <span id="ep-edm-total">--</span></span>
                 <span class="ep-tic-edm-item">\u0394: <span id="ep-tic-var">--</span></span>
                 <span class="ep-tic-edm-grade" id="ep-tic-grade">--</span>
             </div>
@@ -324,7 +324,8 @@ class EnginePage {
             egtChartDur: this._el.querySelector('#ep-chart-dur'),
             chtChartDur: this._el.querySelector('#ep-cht-chart-dur'),
             ticEdmRow: this._el.querySelector('#ep-tic-edm-row'),
-            ticTotal: this._el.querySelector('#ep-tic-total'),
+            trkTotal: this._el.querySelector('#ep-trk-total'),
+            trkUnconf: this._el.querySelector('#ep-trk-unconf'),
             edmTotal: this._el.querySelector('#ep-edm-total'),
             ticVar: this._el.querySelector('#ep-tic-var'),
             ticGrade: this._el.querySelector('#ep-tic-grade'),
@@ -438,6 +439,13 @@ class EnginePage {
         const container = this._el.querySelector('.ep-container');
         if (!el) return;
 
+        // Engine data held over from an older frame (Pi disconnected, no fresh frame
+        // for > 5 s, or a frozen EDM row): the ENG page greys it as stale below, and
+        // update() hides the D-180 side of the TRACKED vs D-180 row on the same signal.
+        this._feedStale = !!data && (pollTime === 0 || Math.round((Date.now() - pollTime) / 1000) > 5 ||
+            (typeof EngineClient !== 'undefined' && typeof EngineClient.edmCurrent === 'function' &&
+             !EngineClient.edmCurrent(data)));
+
         if (!data || pollTime === 0) {
             el.textContent = 'ENGINE MON. OFFLINE';
             el.className = 'ep-data-age ep-data-age--offline';
@@ -536,13 +544,18 @@ class EnginePage {
         // whether a figure is trustworthy; it is already false for `manual` (the
         // pilot's own entry) and `capacity` (nothing tracked).
         const fuelStale = !!fuelRead.stale;
-        // The EDM's own totalizer (EDM field 12). Used ONLY by the TIC vs EDM
-        // cross-check row below, whose whole purpose is to surface disagreement
-        // between the tic-mark measurement and the EDM — it must stay an EDM read.
-        const edmFuelRem = d.gallons_rem ?? d.fuel_remaining_gal ?? d.Gallons_Rem ?? d.Fuel_Remaining ?? d.fuel_remaining ?? 0;
-        // engine_monitor.get_status() nests the Pi fuel tracker under `fuel`;
-        // there is no top-level flight_fuel_used.
-        const fuelUsed   = d.fuel?.flight_fuel_used ?? 0;
+        // The Dynon D-180's own fuel computer (EMS serial field 12, Fuel_Remaining).
+        // Used ONLY by the TIC vs D-180 cross-check row below, whose whole purpose is to
+        // surface disagreement between the tic-mark measurement and the D-180 — it must
+        // stay a D-180 read. Same reader as the fuel overlay (FuelEngine.extractEdmFuel:
+        // Fuel_Remaining only, 0 when absent); _updateTicEdm treats 0 as unavailable.
+        const edmFuelRem = FuelEngine.extractEdmFuel(d);
+        // USED = gallons burned since the last tic measurement / fuel stop, from the
+        // tablet's FuelTankState (not the Pi tracker). Three states: nothing tracked
+        // ('--.-'), tracked state saved before the counter existed ('\u2014' - unknown,
+        // not 0), or a real count.
+        const tankState = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
+        const fuelUsed = tankState ? tankState.burned_since_init_gal : undefined;
         const fuelL      = d.fuel_l1 ?? d.Fuel_L1 ?? d.Fuel_Left ?? d.edm_fuel_left ?? 0;
         const fuelR      = d.fuel_l2 ?? d.Fuel_L2 ?? d.Fuel_Right ?? d.edm_fuel_right ?? 0;
 
@@ -629,12 +642,19 @@ class EnginePage {
 
         /* ---- Section 5: Fuel ---- */
         this._setText('ep-fuel-rem', fuelTracked ? gallonsRem.toFixed(1) : '--.-');
-        this._setText('ep-fuel-used', fuelUsed > 0 ? fuelUsed.toFixed(1) : '--.-');
+        this._setText('ep-fuel-used', !tankState ? '--.-'
+            : (typeof fuelUsed === 'number' ? fuelUsed.toFixed(1) : '\u2014'));
         if (this._dom.fuelRem) {
             this._dom.fuelRem.className = 'ep-gauge-value' + (fuelStale ? ' ep-unconfirmed' : '');
         }
         if (this._dom.fuelStale) {
             this._dom.fuelStale.style.display = fuelStale ? '' : 'none';
+            // Say why: fuel-flow data lost with the engine running (marked at once),
+            // or the 45-min gap.
+            const flowLost = fuelStale && typeof FuelTankState !== 'undefined' &&
+                typeof FuelTankState.isFlowLost === 'function' && FuelTankState.isFlowLost();
+            const txt = flowLost ? EnginePage.FUEL_FLOW_LOST_TEXT : EnginePage.FUEL_STALE_TEXT;
+            if (this._dom.fuelStale.textContent !== txt) this._dom.fuelStale.textContent = txt;
         }
 
         if (fuelFlow > 0 && fuelTracked) {
@@ -689,8 +709,12 @@ class EnginePage {
             ? `${Math.round(fuelPct)}% (${gallonsRem.toFixed(1)}/${cap} gal)`
             : `--% (--.-/${cap} gal)`);
 
-        /* ---- TIC vs EDM variance ---- */
-        this._updateTicEdm(edmFuelRem);
+        /* ---- TRACKED vs D-180 ---- */
+        // The D-180 figure only from a current frame (the Pi resends its last row
+        // after the EMS goes quiet).
+        const edmCurrent = typeof EngineClient === 'undefined' ||
+            typeof EngineClient.edmCurrent !== 'function' || EngineClient.edmCurrent(d);
+        this._updateTicEdm((edmCurrent && !this._feedStale) ? edmFuelRem : 0);
 
         /* ---- Section 6: Efficiency ---- */
         if (fuelFlow > 0 && gs > 40) {
@@ -749,27 +773,43 @@ class EnginePage {
     }
 
     /* ------------------------------------------------------------------
-     * TIC vs EDM variance display
+     * TRACKED vs D-180 row
      * ----------------------------------------------------------------*/
+    /**
+     * Live tracked fuel (FuelTankState left + right; a manual override is not tracked
+     * fuel) against the D-180's own fuel computer (`edmFuel`, 0 when unavailable or
+     * the frame is not current). Hidden when either is unavailable. Graded with the
+     * D-180 figure as the reference. A stale tracked figure (needsConfirmation():
+     * 45-min gap or fuel-flow data lost) reads high, so it carries '?' and an
+     * UNCONFIRMED tag.
+     * @param {number} edmFuel - D-180 Fuel_Remaining (gal), 0 = unavailable
+     */
     _updateTicEdm(edmFuel) {
         const row = this._dom.ticEdmRow;
         if (!row) return;
 
-        // Only show when we have both a saved tic measurement and live EDM data
-        const measurement = typeof Settings !== 'undefined' ? Settings.fuelMeasurement : null;
-        if (!measurement || !measurement.total_gal || edmFuel <= 0) {
+        let st = null, stale = false;
+        try {
+            if (typeof FuelTankState !== 'undefined') {
+                st = FuelTankState.getState();
+                stale = st ? !!FuelTankState.needsConfirmation() : false;
+            }
+        } catch (_) { st = null; }
+        const tracked = st ? Math.round((st.left_gal + st.right_gal) * 10) / 10 : NaN;
+        if (!Number.isFinite(tracked) || !(edmFuel > 0)) {
             row.style.display = 'none';
             return;
         }
 
         row.style.display = 'flex';
-        const ticTotal = measurement.total_gal;
-        const variance = ticTotal - edmFuel;
+        const variance = tracked - edmFuel;
         const variancePct = Math.abs(variance / edmFuel * 100);
         const grade = typeof FuelEngine !== 'undefined'
             ? FuelEngine.getAccuracyGrade(variancePct) : 'check';
 
-        this._dom.ticTotal.textContent = ticTotal.toFixed(1);
+        this._dom.trkTotal.textContent = tracked.toFixed(1) + (stale ? '?' : '');
+        this._dom.trkTotal.classList.toggle('ep-unconfirmed', stale);
+        if (this._dom.trkUnconf) this._dom.trkUnconf.style.display = stale ? '' : 'none';
         this._dom.edmTotal.textContent = edmFuel.toFixed(1);
         this._dom.ticVar.textContent = (variance > 0 ? '+' : '') + variance.toFixed(1);
         this._dom.ticGrade.textContent = grade.toUpperCase();
@@ -1645,3 +1685,10 @@ class EnginePage {
 `;
     }
 }
+
+/** ENG page UNCONFIRMED banner: the 45-min gap, and fuel-flow data lost with the
+ *  engine running (FuelTankState.markFlowLost). */
+EnginePage.FUEL_STALE_TEXT =
+    'UNCONFIRMED \u2014 TANK STATE NOT UPDATED IN 45+ MIN. REMAINING MAY READ HIGH; CONFIRM FUEL.';
+EnginePage.FUEL_FLOW_LOST_TEXT =
+    'UNCONFIRMED \u2014 ENGINE DATA LOST WITH THE ENGINE RUNNING; BURN NOT COUNTED. REMAINING MAY READ HIGH; CONFIRM FUEL.';

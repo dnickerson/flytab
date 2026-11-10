@@ -1,9 +1,9 @@
 /**
- * flight-recorder.js's per-row fuel_remaining field used `||` instead of `??`,
- * so an exact-zero reading (tank empty — a real, safety-relevant value) was
- * silently discarded in favor of a fallback field instead of being logged.
+ * flight-recorder.js's Gallons Remaining column is the tablet's tracked total
+ * (FuelState.getCurrentFuel; tank_state or manual), empty for the capacity default.
+ * An exact-zero total (tank empty) must still be logged.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -12,8 +12,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');
 
 const FlightRecorder = new Function(read('web/cockpit/flight-recorder.js') + '\nreturn FlightRecorder;')();
+// Real FuelState (measuredGallons() is what the recorder reads) with the fuel read stubbed.
+const RealFuelState = new Function(read('web/shared/fuel-state.js') + '\nreturn FuelState;')();
 
-function makeRecorder(fuelRemaining) {
+function makeRecorder(piFuelRemaining) {
     const rec = Object.create(FlightRecorder.prototype);
     rec._csvBuffer = [];
     rec._rowCount = 0;
@@ -23,33 +25,59 @@ function makeRecorder(fuelRemaining) {
     rec._engine = {
         dataAge: 0,
         lastData: {
-            data: { RPM: 2400, Fuel_Flow: 9.5, Fuel_Remaining: 99 }, // decoy fallback value
-            fuel: { fuel_remaining: fuelRemaining },
+            data: { RPM: 2400, Fuel_Flow: 9.5, Fuel_Remaining: 99 }, // EMS decoy: must not be used
+            fuel: { fuel_remaining: piFuelRemaining },               // Pi tracker decoy
         },
     };
     rec._stratux = { situation: null };
     return rec;
 }
 
-describe('FlightRecorder._recordRow fuel_remaining', () => {
-    it('logs an exact-zero fuel_remaining instead of falling back', () => {
-        const rec = makeRecorder(0);
-        rec._recordRow();
-        const cols = rec._csvBuffer[0].split(',');
-        expect(cols[9]).toBe('0'); // column index 9 = Gallons Remaining, per CSV_HEADER
+function cell(gal, source, stale = false) {
+    RealFuelState.getCurrentFuel = () => ({ gallons: gal, source, stale });
+    globalThis.FuelState = RealFuelState;
+    const rec = makeRecorder(30);
+    rec._recordRow();
+    return rec._csvBuffer[0].split(',')[9]; // column 9 = Gallons Remaining, per CSV_HEADER
+}
+
+afterEach(() => { delete globalThis.FuelState; });
+
+describe('FlightRecorder._recordRow Gallons Remaining', () => {
+    it('Gallons Remaining column is the tablet-tracked total', () => {
+        expect(cell(21.4, 'tank_state')).toBe('21.4');
     });
 
-    it('still falls back to Fuel_Remaining when fuel_remaining is genuinely absent', () => {
-        const rec = makeRecorder(undefined);
-        rec._recordRow();
-        const cols = rec._csvBuffer[0].split(',');
-        expect(cols[9]).toBe('99');
+    it('rounds the tracked total to 0.1 gal, written like the old column (no trailing .0)', () => {
+        expect(cell(21.43719, 'tank_state')).toBe('21.4');
+        expect(cell(14.96, 'tank_state')).toBe('15');
+        expect(cell(0.04, 'tank_state')).toBe('0');
     });
 
-    it('uses a real positive fuel_remaining over the fallback', () => {
-        const rec = makeRecorder(12.5);
+    it('logs an exact-zero tracked total (tank empty is a real value)', () => {
+        expect(cell(0, 'tank_state')).toBe('0');
+    });
+
+    it('logs the pilot manual figure', () => {
+        expect(cell(15, 'manual')).toBe('15');
+    });
+
+    it('is empty (not 36) when only the capacity default is known', () => {
+        expect(cell(36, 'capacity')).toBe('');
+    });
+
+    it('is empty for a stale (UNCONFIRMED) tracked figure — it reads high, not a measurement', () => {
+        expect(cell(21.4, 'tank_state', true)).toBe('');
+    });
+
+    it('reads through FuelState.measuredGallons() (no private copy)', () => {
+        expect(read('web/cockpit/flight-recorder.js')).toMatch(/FuelState\.measuredGallons\(\)/);
+    });
+
+    it('is empty when FuelState is unavailable, never the Pi or EMS figure', () => {
+        delete globalThis.FuelState;
+        const rec = makeRecorder(30);
         rec._recordRow();
-        const cols = rec._csvBuffer[0].split(',');
-        expect(cols[9]).toBe('12.5');
+        expect(rec._csvBuffer[0].split(',')[9]).toBe('');
     });
 });
