@@ -49,7 +49,6 @@ beforeEach(() => {
     Settings.fuelManualOverride = null;
     FuelTankState._state = null;
     FuelTankState._loaded = false;
-    FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
     globalThis.CockpitConfig = {
         get: () => null,
         aircraft: (p) => (p === 'performance.fuel_capacity_gal' ? 36
@@ -132,7 +131,6 @@ describe('finding 1: flow lost while the engine runs → UNCONFIRMED at once', (
         client.dispatchEvent(frozen(9));
         FuelTankState._state = null;
         FuelTankState._loaded = false;
-        FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
         expect(stale()).toBe(true);
     });
 
@@ -169,7 +167,6 @@ describe('finding 1: engine off on the ground is not marked', () => {
         widget.destroy();
         FuelTankState._state = null;
         FuelTankState._loaded = false;
-        FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
         at(NOW + 30000);
         mount();
         client.dispatchEvent(frozen(9));

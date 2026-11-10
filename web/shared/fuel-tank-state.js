@@ -3,6 +3,23 @@
  * Integrates measured fuel flow against pilot-reported tank selection.
  * Flight-safety critical: errors cause fuel exhaustion risk.
  * Never auto-corrects from senders. Requires human-in-the-loop confirmation.
+ *
+ * Engine model (state.engine, persisted with the tank state). One explicit model of
+ * what the engine is doing decides which un-integrated time is dropped burn:
+ *   state          'off' | 'running' | 'unknown'
+ *   since          ISO time the state was entered
+ *   covered_at     ISO time up to which engine time is accounted for: integrated,
+ *                  known zero (engine off, a fuel-flow reading of 0 while running),
+ *                  or added to pending_gap_ms. Gap = now − covered_at.
+ *   zero_flow_since ISO start of the current FF-0 running stretch, or null
+ *   pending_gap_ms running time that burned fuel but has not been booked yet (an
+ *                  outage, an unobserved stretch, a stuck sender, burn while
+ *                  requires_confirm blocks integration). Booked as dropped burn at
+ *                  the next frame with flow, at that frame's GPH.
+ * plus the top-level flow_lost_at / flow_lost_reason ('data' | 'zero_flow') and
+ * last_burn_at. Transitions: onFrame()/onSample() (current engine frames),
+ * markFlowLost() (stale / disconnect / frozen frames), init(), migration in _load().
+ * markConfirmed() never touches it. See the transition table in onFrame().
  */
 
 class FuelTankState {
@@ -15,29 +32,33 @@ class FuelTankState {
     static CONFIRM_INTERVAL_MS = 30 * 60 * 1000;
     /** Cap dt between samples to avoid large jumps on reconnect */
     static MAX_SAMPLE_DT_MS = 10000;
-    /** markFlowLost(): with no current frame seen yet this session (app restart), the
-     *  engine counts as running if burn was integrated (last_burn_at) this recently. */
+    /** markFlowLost() with no current frame seen this app session, and migration of
+     *  state stored before the engine model: the engine counts as running only if it
+     *  was known running (or burn was integrated) this recently. */
     static RECENT_BURN_MS = 2 * 60 * 1000;
-    /** markFlowLost(): the last current frame counts as "engine running" only above
-     *  this RPM. A stopped engine can still report residual flow (3 of 126 recorded
-     *  flights end with RPM 0 and Fuel Flow 0.5-0.9). */
+    /** Running vs stopped is decided by RPM only, never by fuel flow: above this RPM
+     *  the engine is running. A stopped engine can still report residual flow (3 of
+     *  126 recorded flights end with RPM 0 and Fuel Flow 0.5-0.9), and the D-180 reads
+     *  FF 0 at 1000-1900 RPM with the engine running (11 of 126 files; 33 s at taxi in
+     *  20260130_KLKR-KUZA, two rows at 81 kt in 20261014); no RPM <= 300 reading lies
+     *  between RPM > 1500 readings in any recorded file. */
     static RUNNING_RPM_MIN = 300;
-    /** noteZeroFlowFrame(): a running engine (current frames, RPM > RUNNING_RPM_MIN)
-     *  reporting FF 0 for longer than this since the last integrated sample is not a
-     *  low-flow reading but a stuck / failed sender: flow is marked lost. The recorded
-     *  flights (~/engine_analysis, Nov 2026) show FF-0 stretches with the engine
-     *  running of at most about 60 s (taxi / idle; 33 s in 20260130_KLKR-KUZA). */
+    /** A running engine (current frames, RPM > RUNNING_RPM_MIN) reporting FF 0 for
+     *  longer than this, measured from the start of the FF-0 stretch
+     *  (engine.zero_flow_since), is not a low-flow reading but a stuck / failed
+     *  sender: flow is marked lost ('zero_flow'). The recorded flights
+     *  (~/engine_analysis, Nov 2026) show FF-0 stretches with the engine running of
+     *  at most about 60 s (taxi / idle; 33 s in 20260130_KLKR-KUZA). */
     static ZERO_FLOW_MAX_MS = 90 * 1000;
+    /** The engine cannot still be running this long after data was lost: 36 gal
+     *  usable at the lowest power-setting flow in aircraft-config.json (5.0 gph) lasts
+     *  7.2 h. Used for init() during an outage (older outage → not carried) and for a
+     *  gap longer than this (not booked: unquantifiable, figure stays UNCONFIRMED). */
+    static OUTAGE_RUNNING_MAX_MS = 8 * 60 * 60 * 1000;
 
     static _state = null;
     static _loaded = false;
     static _lastConfirmPromptAt = 0;
-    /** In memory only: time of the last current frame with the engine running and
-     *  FF 0 that continued unbroken coverage since the last integrated sample
-     *  (noteZeroFlowFrame). onSample measures its interval from it, so an FF-0
-     *  stretch books no gap. Lost on an app restart: then the interval runs from
-     *  last_sample_at (an over-estimate at worst). Not used for staleness. */
-    static _coveredMs = null;
 
     static _load() {
         if (FuelTankState._loaded) return;
@@ -48,7 +69,41 @@ class FuelTankState {
         } catch (_) {
             FuelTankState._state = null;
         }
+        if (FuelTankState._state && !FuelTankState._state.engine) {
+            FuelTankState._state.engine = FuelTankState._migrateEngine(FuelTankState._state, Date.now());
+            delete FuelTankState._state.engine_stopped_at;
+            delete FuelTankState._state.stop_seen_at;
+            FuelTankState._save();
+        }
         FuelTankState._checkStaleness();
+    }
+
+    static _ms(iso) {
+        if (!iso) return NaN;
+        const t = new Date(iso).getTime();
+        return Number.isFinite(t) ? t : NaN;
+    }
+
+    static _iso(ms) { return new Date(ms).toISOString(); }
+
+    /**
+     * Engine model for state stored before it existed (v13.7 and earlier). Derived
+     * conservatively: a noted stop → 'off'; flow lost with the engine running →
+     * 'running' (the outage is still booked at the next frame with flow); burn
+     * integrated within RECENT_BURN_MS → 'running'; otherwise 'unknown' (the first
+     * sample books nothing). The old engine_stopped_at / stop_seen_at are read here
+     * only. covered_at = last_sample_at (what the old code measured gaps from).
+     */
+    static _migrateEngine(st, nowMs) {
+        const covered = st.last_sample_at || FuelTankState._iso(nowMs);
+        const burnMs = FuelTankState._ms(st.last_burn_at);
+        let state = 'unknown';
+        if (st.engine_stopped_at) state = 'off';
+        else if (st.flow_lost_at) state = 'running';
+        else if (Number.isFinite(burnMs) && nowMs - burnMs >= 0 && nowMs - burnMs <= FuelTankState.RECENT_BURN_MS) {
+            state = 'running';
+        }
+        return { state, since: covered, covered_at: covered, zero_flow_since: null, pending_gap_ms: 0 };
     }
 
     /** Re-evaluate staleness against the current clock. Called on every getState()/needsConfirmation(),
@@ -92,33 +147,60 @@ class FuelTankState {
         return fallback;
     }
 
+
     /**
      * Initialize with preflight fuel quantities. Clears requires_confirm.
+     * The engine model is carried over from the state being replaced, because a
+     * re-entry (widget SET, recovery CONFIRM) can happen in flight:
+     *  - outage ongoing (engine running, flow_lost_at set, the outage younger than
+     *    OUTAGE_RUNNING_MAX_MS): stays 'running' and flow-lost (UNCONFIRMED stays
+     *    until a frame with flow books the time from this entry to it);
+     *  - engine running with data flowing (covered within STALE_MS): stays 'running';
+     *  - otherwise (engine seen off, no prior state, 45+ min stale with no flow lost,
+     *    an outage older than OUTAGE_RUNNING_MAX_MS): 'off' if it was off, else
+     *    'unknown'; flow-lost cleared.
+     * In every case covered_at = now and pending_gap_ms = 0: the entered quantity
+     * replaces anything unbooked before it.
      * @param {number} leftGal
      * @param {number} rightGal
      * @param {'L'|'R'} activeTank - this airframe has no BOTH selector position
      */
     static init(leftGal, rightGal, activeTank = 'L') {
         const nowMs = Date.now();
-        const now = new Date(nowMs).toISOString();
-        // A re-entry (widget SET, recovery CONFIRM) can happen in flight, even during
-        // a data outage. It must not erase the knowledge that the engine is running,
-        // or the burn from now until data returns would never be booked. Read it
-        // from the state being replaced, before it is overwritten.
+        const now = FuelTankState._iso(nowMs);
         FuelTankState._load();
-        const engineRunning = FuelTankState._engineRunningAt(FuelTankState._state, nowMs);
+        const prior = FuelTankState._state;
+        const peng = prior && prior.engine;
+        let engState = (peng && peng.state === 'off') ? 'off' : 'unknown';
+        let since = now;
+        let flowLostAt = null;
+        let flowLostReason = null;
+        if (peng && peng.state === 'running') {
+            const lostMs = FuelTankState._ms(prior.flow_lost_at);
+            const covMs = FuelTankState._ms(peng.covered_at);
+            if (Number.isFinite(lostMs) && nowMs - lostMs <= FuelTankState.OUTAGE_RUNNING_MAX_MS) {
+                engState = 'running';
+                flowLostAt = prior.flow_lost_at;
+                flowLostReason = prior.flow_lost_reason === 'zero_flow' ? 'zero_flow' : 'data';
+            } else if (!Number.isFinite(lostMs) && Number.isFinite(covMs) &&
+                       nowMs - covMs <= FuelTankState.STALE_MS) {
+                engState = 'running';
+            }
+            if (engState === 'running') since = peng.since || now;
+        }
         // This aircraft draws from one tank at a time — there is no BOTH position on the
         // selector. A legacy 'BOTH' (or anything else) is not a tank we can integrate
         // against, so fall back to L and make the pilot confirm rather than guessing.
         const validTank = (activeTank === 'L' || activeTank === 'R');
-        FuelTankState._lastConfirmPromptAt = Date.now();
-        FuelTankState._coveredMs = null;
+        FuelTankState._lastConfirmPromptAt = nowMs;
         const perSideCap = FuelTankState.perSideCapGal(Infinity);
         FuelTankState._state = {
             left_gal: Math.min(perSideCap, Math.max(0, leftGal)),
             right_gal: Math.min(perSideCap, Math.max(0, rightGal)),
             active_tank: validTank ? activeTank : 'L',
             tank_switched_at: now,
+            // Time of the last integrated sample, init() or markConfirmed(): the
+            // STALE_MS confirmation rule only. Gap booking uses engine.covered_at.
             last_sample_at: now,
             requires_confirm: !validTank,
             initialized_at: now,
@@ -135,173 +217,252 @@ class FuelTankState {
             // measured flow, so the K-factor calculator subtracts them out of the
             // tracked burn. Absent in state stored before the field existed.
             dropped_applied_since_init_gal: 0,
-            // Set by markFlowLost() when fuel-flow data stops or freezes while the
-            // engine is running: burn is no longer integrated, so the figure reads
-            // high from that moment. Cleared by the next integrated sample (onSample)
-            // or a fresh init(). needsConfirmation() is true while it is set.
-            flow_lost_at: null,
-            // Why flow_lost_at is set: 'data' (engine data stopped / froze / an
-            // unobserved stretch) or 'zero_flow' (FF 0 with the engine running for
-            // more than ZERO_FLOW_MAX_MS: a stuck sender). Cleared with flow_lost_at.
-            // Absent in older state (read as 'data').
-            flow_lost_reason: null,
-            // Time of the last sample that actually integrated burn (onSample only;
-            // init() and markConfirmed() do not set it, unlike last_sample_at).
-            // Null here also means "no previous burning sample": the first sample
-            // after init() books no comms gap (onSample), so the time between a tic
-            // and engine start is never offered as dropped burn. Set to now instead
-            // when the engine was running at this init (_engineRunningAt): then a gap
-            // from now to the next sample is booked like any resumed outage.
-            last_burn_at: engineRunning ? now : null,
-            // Set by noteEngineStopped() when a current frame shows the engine
-            // stopped (RPM <= RUNNING_RPM_MIN). While set, a gap before the next
-            // sample is engine-off time, not dropped burn. Cleared by the next
-            // sample with the engine running (onSample). Absent in older state.
-            engine_stopped_at: null,
-            // Set by noteEngineStopped() at the first current frame with the engine
-            // stopped, in every case, also when engine_stopped_at is held back (a
-            // stop right after an unobserved burning stretch). Says "the engine is
-            // known to be off now" to init() (_engineRunningAt). Cleared with
-            // engine_stopped_at by the next frame/sample with the engine running.
-            stop_seen_at: null,
+            // Fuel-flow data lost with the engine running (markFlowLost, an
+            // unobserved stretch, a stuck sender): burn is not integrated, so the
+            // figure reads high. Cleared by the next frame with flow (which books the
+            // unbooked time) or by init() unless the outage is ongoing.
+            // needsConfirmation() is true while it is set.
+            flow_lost_at: flowLostAt,
+            // 'data' (engine data stopped / froze / unobserved) or 'zero_flow' (FF 0
+            // with the engine running > ZERO_FLOW_MAX_MS: a stuck sender). Absent in
+            // older state (read as 'data').
+            flow_lost_reason: flowLostReason,
+            // Time of the last sample that integrated burn (also residual flow).
+            last_burn_at: null,
             // Gallons of comms-gap burn estimated since this init(): every amount
-            // onSample() added to dropped_burn_estimate_gal, applied or not. The
-            // K-factor calculator excludes a leg with a real gap (that burn is in the
-            // tic difference but not in the flow burn). Absent in older state.
+            // added to dropped_burn_estimate_gal, applied or not. The K-factor
+            // calculator excludes a leg with a real gap. Absent in older state.
             gap_burn_since_init_gal: 0,
+            engine: { state: engState, since, covered_at: now, zero_flow_since: null, pending_gap_ms: 0 },
         };
         FuelTankState._loaded = true;
         FuelTankState._save();
         FuelTankState._fire();
     }
 
-    /**
-     * Was the engine running at `nowMs`, judged from a stored state (init() reads the
-     * state it is about to replace)? True when the state is not stale (last_sample_at
-     * within STALE_MS), no stopped engine was seen since the last running frame
-     * (stop_seen_at / engine_stopped_at), and either flow was lost with the engine
-     * running (flow_lost_at) or burn was integrated (last_burn_at). False with no
-     * state, after a seen stop (incl. data back after an outage with the engine
-     * already stopped), or when stale:
-     * 45+ min without a sample says nothing about now (e.g. next day, Pi switched
-     * off before the shutdown was seen), and guessing "running" there would book
-     * the time from a tic to engine start as dropped burn again.
-     * @param {object|null} st
-     * @param {number} nowMs
-     */
-    static _engineRunningAt(st, nowMs) {
-        if (!st) return false;
-        const lastMs = st.last_sample_at ? new Date(st.last_sample_at).getTime() : NaN;
-        if (!Number.isFinite(lastMs) || (nowMs - lastMs) > FuelTankState.STALE_MS) return false;
-        if (st.stop_seen_at || st.engine_stopped_at) return false;
-        if (st.flow_lost_at) return true;
-        return !!st.last_burn_at;
+    /** A finite RPM at or below RUNNING_RPM_MIN: the engine is stopped. */
+    static _isStoppedRpm(rpm) {
+        return typeof rpm === 'number' && Number.isFinite(rpm) && rpm <= FuelTankState.RUNNING_RPM_MIN;
+    }
+
+    static _setFlowLost(st, nowMs, reason) {
+        if (st.flow_lost_at && st.flow_lost_reason === reason) return false;
+        if (!st.flow_lost_at) st.flow_lost_at = FuelTankState._iso(nowMs);
+        st.flow_lost_reason = reason;
+        return true;
     }
 
     /**
-     * Process one engine data sample. Integrates fuel flow against active tank.
-     * The interval is measured from the later of last_sample_at and the last
-     * zero-flow running frame that continued unbroken coverage (noteZeroFlowFrame):
-     * current frames with FF 0 while the engine runs are a sensor reading (the D-180
-     * reads 0 at idle / taxi), not a dropout, so they are neither integrated nor
-     * booked as a gap.
-     * An interval longer than MAX_SAMPLE_DT_MS integrates only the capped dt; the
-     * rest is added to dropped_burn_estimate_gal (the pilot's APPLY CORRECTION
-     * prompt) ONLY when the engine was burning at the last integrated sample
-     * (last_burn_at set — never right after init() unless the engine was running
-     * then) and no engine stop was seen since (engine_stopped_at null). Otherwise
-     * the gap was engine-off time and books nothing.
-     *
-     * A sample whose RPM shows the engine stopped (residual flow) while flow is lost
-     * (flow_lost_at) or after a gap that would count as burning is skipped entirely:
-     * the outage is not booked at the residual GPH and flow_lost_at (UNCONFIRMED)
-     * stays until fuel is re-entered or the engine is restarted (then the outage is
-     * booked at the restart GPH).
+     * One CURRENT engine frame (EngineClient.edmCurrent). fuel-tanks.js calls this
+     * for every current frame; frames with flow go through onSample().
+     * @param {number} nowMs
+     * @param {number} gph - fuel flow (0 / missing = no flow reading)
+     * @param {number} [rpm] - frame RPM (missing → frames with flow count as running)
+     */
+    static onFrame(nowMs, gph, rpm) {
+        const g = Number(gph);
+        if (Number.isFinite(g) && g > 0) return FuelTankState.onSample(g, nowMs, rpm);
+        return FuelTankState._frame(nowMs, 0, rpm);
+    }
+
+    /**
+     * A current engine frame with fuel flow > 0 (also residual flow on a stopped
+     * engine). Integrates against the active tank and books unbooked running time.
+     * Kept as the entry point for frames with flow (and for direct callers).
      * @param {number} gph - Fuel flow in gallons per hour (must be > 0)
      * @param {number} nowMs - Current timestamp (Date.now())
-     * @param {number} [rpm] - RPM of this frame. A finite RPM <= RUNNING_RPM_MIN
-     *   (residual flow on a stopped engine) integrates as before but does not clear
-     *   engine_stopped_at; any other value (incl. missing) clears it.
+     * @param {number} [rpm] - frame RPM; missing → running, but from 'off' /
+     *   'unknown' it integrates the capped dt and books nothing (no start seen)
      */
     static onSample(gph, nowMs, rpm) {
-        FuelTankState._load();
-        if (!FuelTankState._state || FuelTankState._state.requires_confirm) return;
         if (!gph || gph <= 0) return;
+        FuelTankState._frame(nowMs, gph, rpm);
+    }
 
-        let lastMs = FuelTankState._state.last_sample_at
-            ? new Date(FuelTankState._state.last_sample_at).getTime()
-            : nowMs;
-        const covMs = FuelTankState._coveredMs;
-        if (Number.isFinite(covMs) && covMs > lastMs && covMs < nowMs) lastMs = covMs;
-        const rawDtMs = nowMs - lastMs;
-        const dtMs = Math.min(rawDtMs, FuelTankState.MAX_SAMPLE_DT_MS);
-        if (dtMs <= 0) return;
+    /**
+     * Engine-model transition for one current frame. Kinds: STOPPED (finite RPM <=
+     * RUNNING_RPM_MIN), FLOW (running or RPM missing, GPH > 0), ZERO (RPM > 300,
+     * GPH 0). gap = now − covered_at; "unobserved" = gap > MAX_SAMPLE_DT_MS.
+     *
+     *  prior state  | kind    | effect
+     *  running      | any, unobserved (gap ≤ OUTAGE_RUNNING_MAX_MS) | gap → pending
+     *               |         | (FLOW: the first MAX_SAMPLE_DT_MS integrated instead);
+     *               |         | not FLOW: flow lost 'data'; zero_flow_since reset
+     *  running      | any, gap > OUTAGE_RUNNING_MAX_MS | gap not booked; flow lost
+     *               |         | 'data' unless FLOW (state treated as unknown)
+     *  running      | FLOW    | integrate min(pending + gap, MAX) at GPH; book the
+     *               |         | rest of pending + gap as dropped burn; clear flow lost
+     *               |         | and zero_flow_since (requires_confirm: gap → pending)
+     *  running      | ZERO    | flow lost: gap → pending (unconfirmed reading).
+     *               |         | Else a reading: nothing booked. zero_flow_since =
+     *               |         | covered_at (continuous) / now; > ZERO_FLOW_MAX_MS →
+     *               |         | flow lost 'zero_flow', the stretch → pending
+     *  off/unknown  | FLOW/ZERO with RPM | engine start: nothing integrated before now
+     *  off/unknown  | FLOW, RPM missing | integrate min(gap, MAX); book nothing
+     *  any          | STOPPED | state off; zero_flow_since null; residual flow
+     *               |         | integrated (capped) only when nothing is pending and
+     *               |         | flow is not lost (else UNCONFIRMED stays; the pending
+     *               |         | time is booked at the next frame with flow, i.e. the
+     *               |         | restart)
+     * Always: covered_at = now.
+     */
+    static _frame(nowMs, gph, rpm) {
+        FuelTankState._load();
+        const st = FuelTankState._state;
+        if (!st) return;
+        if (!st.engine) st.engine = FuelTankState._migrateEngine(st, nowMs);
+        const eng = st.engine;
+        const MAX = FuelTankState.MAX_SAMPLE_DT_MS;
+        const rpmKnown = typeof rpm === 'number' && Number.isFinite(rpm);
+        const stopped = FuelTankState._isStoppedRpm(rpm);
+        const flow = !stopped && gph > 0;
+        const zero = !stopped && !(gph > 0) && rpmKnown;
+        if (!stopped && !flow && !zero) return;   // FF 0 with no RPM: says nothing
+        const block = !!st.requires_confirm;
 
-        const droppedMs = rawDtMs - dtMs;
-        const gapWasBurning = !!FuelTankState._state.last_burn_at && !FuelTankState._state.engine_stopped_at;
-        if (FuelTankState._isStoppedRpm(rpm) &&
-            (FuelTankState._state.flow_lost_at || (droppedMs > 0 && gapWasBurning))) {
-            return;
-        }
-        if (droppedMs > 0 && gapWasBurning) {
-            const droppedGal = gph * (droppedMs / 1000) / 3600;
-            FuelTankState._state.dropped_burn_estimate_gal =
-                (FuelTankState._state.dropped_burn_estimate_gal || 0) + droppedGal;
-            if (typeof FuelTankState._state.gap_burn_since_init_gal === 'number') {
-                FuelTankState._state.gap_burn_since_init_gal += droppedGal;
+        const covMs = FuelTankState._ms(eng.covered_at);
+        const gapMs = Number.isFinite(covMs) ? Math.max(0, nowMs - covMs) : 0;
+        let running = eng.state === 'running';
+        let pending = Number(eng.pending_gap_ms) || 0;
+        let changed = false;
+        let integrateMs = 0;
+        let intervalStart = Number.isFinite(covMs) ? covMs : nowMs;
+
+        if (running && gapMs > FuelTankState.OUTAGE_RUNNING_MAX_MS) {
+            // Longer than the engine can run: unquantifiable; the figure stays
+            // UNCONFIRMED (and the STALE_MS rule asks for a re-entry).
+            if (!flow) changed = FuelTankState._setFlowLost(st, nowMs, 'data') || changed;
+            eng.zero_flow_since = null;
+            eng.state = 'unknown';
+            running = false;
+        } else if (running && gapMs > MAX) {
+            // Unobserved running time: app restart, outage, frames frozen.
+            if (flow && !block) {
+                integrateMs = MAX;
+                pending += gapMs - MAX;
+            } else {
+                pending += gapMs;
+            }
+            // Data stopped: a stuck-sender mark becomes 'data'; FF 0 after the return
+            // starts a new zero-flow stretch (the 90 s rule from the return time).
+            if (!flow) changed = FuelTankState._setFlowLost(st, nowMs, 'data') || changed;
+            eng.zero_flow_since = null;
+        } else if (running) {
+            if (flow) {
+                if (block) pending += gapMs;
+                else integrateMs = gapMs;
+            } else if (zero && st.flow_lost_at) {
+                pending += gapMs;                    // not a confirmed reading yet
             }
         }
 
-        const burned = gph * (dtMs / 1000) / 3600;
-
-        // If the pilot switched tanks since the last sample, split this interval's
-        // burn at the switch point instead of crediting it all to whichever tank is
-        // active now — otherwise burn actually drawn from the tank just left, before
-        // the switch, is never subtracted from it.
-        const switchMs = FuelTankState._state.tank_switched_at
-            ? new Date(FuelTankState._state.tank_switched_at).getTime()
-            : null;
-        const preSwitchTank = FuelTankState._state.pre_switch_tank;
-        FuelTankState._state.pre_switch_tank = null; // consume regardless of outcome below
-
-        if (preSwitchTank && switchMs !== null && switchMs > lastMs && switchMs < nowMs) {
-            const preFraction = (switchMs - lastMs) / rawDtMs;
-            const burnedPre = burned * preFraction;
-            const burnedPost = burned - burnedPre;
-            if (!FuelTankState._debitTank(preSwitchTank, burnedPre)) return;
-            if (!FuelTankState._debitActiveTank(burnedPost)) return;
+        const startedNow = !running && (flow || zero);
+        if (stopped) {
+            if (eng.state !== 'off') { eng.state = 'off'; eng.since = FuelTankState._iso(nowMs); }
+            eng.zero_flow_since = null;
+            // Residual flow on a stopped engine integrates as before, unless an
+            // unbooked stretch is open (it would be booked at the residual GPH).
+            if (gph > 0 && !block && !st.flow_lost_at && pending === 0) {
+                integrateMs = Math.min(gapMs, MAX);
+            } else {
+                integrateMs = 0;
+            }
         } else {
-            if (!FuelTankState._debitActiveTank(burned)) return;
+            if (startedNow) {
+                eng.state = 'running';
+                eng.since = FuelTankState._iso(nowMs);
+                // A start seen in the frames: nothing burned before now. A frame with
+                // flow but no RPM (direct callers): the capped dt, nothing booked.
+                integrateMs = (flow && !rpmKnown && !block) ? Math.min(gapMs, MAX) : 0;
+            }
+            if (zero) {
+                if (eng.zero_flow_since == null) {
+                    eng.zero_flow_since = (running && gapMs <= MAX && Number.isFinite(covMs))
+                        ? eng.covered_at : FuelTankState._iso(nowMs);
+                }
+                const zMs = FuelTankState._ms(eng.zero_flow_since);
+                if (Number.isFinite(zMs) && nowMs - zMs > FuelTankState.ZERO_FLOW_MAX_MS &&
+                    st.flow_lost_reason !== 'zero_flow') {
+                    if (!st.flow_lost_at) pending += nowMs - zMs;   // the stretch so far
+                    changed = FuelTankState._setFlowLost(st, nowMs, 'zero_flow') || changed;
+                }
+            }
         }
 
-        FuelTankState._state.last_sample_at = new Date(nowMs).toISOString();
-        FuelTankState._state.last_burn_at = FuelTankState._state.last_sample_at;
-        // Flow is integrating again. Any burn during the gap was recorded above as
-        // dropped_burn_estimate_gal (the pilot's dropped-burn correction).
-        FuelTankState._state.flow_lost_at = null;
-        FuelTankState._state.flow_lost_reason = null;
-        if (!FuelTankState._isStoppedRpm(rpm)) {
-            FuelTankState._state.engine_stopped_at = null;
-            FuelTankState._state.stop_seen_at = null;
+        let integrated = false;
+        if (flow && !block) {
+            // Book pending time with the 10 s convention over all unbooked time:
+            // integrate min(total, MAX), book the rest.
+            const total = pending + integrateMs;
+            const intMs = Math.min(total, MAX);
+            const bookMs = total - intMs;
+            if (bookMs > 0) {
+                const droppedGal = gph * (bookMs / 1000) / 3600;
+                st.dropped_burn_estimate_gal = (st.dropped_burn_estimate_gal || 0) + droppedGal;
+                if (typeof st.gap_burn_since_init_gal === 'number') st.gap_burn_since_init_gal += droppedGal;
+            }
+            pending = 0;
+            if (!FuelTankState._integrate(st, gph, intMs, nowMs, intervalStart)) {
+                eng.pending_gap_ms = 0;
+                eng.covered_at = FuelTankState._iso(nowMs);
+                FuelTankState._save();
+                return;
+            }
+            integrated = true;
+            if (st.flow_lost_at) changed = true;
+            st.flow_lost_at = null;
+            st.flow_lost_reason = null;
+            eng.zero_flow_since = null;
+        } else if (stopped && integrateMs > 0) {
+            if (!FuelTankState._integrate(st, gph, integrateMs, nowMs, intervalStart)) {
+                eng.covered_at = FuelTankState._iso(nowMs);
+                FuelTankState._save();
+                return;
+            }
+            integrated = true;
         }
 
-        const diff = Math.abs(FuelTankState._state.left_gal - FuelTankState._state.right_gal);
-        FuelTankState._state.imbalance = (
-            diff > FuelTankState.IMBALANCE_GAL &&
-            FuelTankState._state.left_gal > 2 &&
-            FuelTankState._state.right_gal > 2
-        );
-
+        eng.pending_gap_ms = pending;
+        eng.covered_at = FuelTankState._iso(nowMs);
         FuelTankState._save();
-        FuelTankState._fire();
+        if (integrated || changed) FuelTankState._fire();
 
         // Periodic confirmation prompt while engine is running
-        if ((nowMs - FuelTankState._lastConfirmPromptAt) > FuelTankState.CONFIRM_INTERVAL_MS) {
+        if (integrated && (nowMs - FuelTankState._lastConfirmPromptAt) > FuelTankState.CONFIRM_INTERVAL_MS) {
             FuelTankState._lastConfirmPromptAt = nowMs;
             window.dispatchEvent(new CustomEvent('fueltankstate:confirm_prompt', {
-                detail: { active_tank: FuelTankState._state.active_tank }
+                detail: { active_tank: st.active_tank }
             }));
         }
+    }
+
+    /**
+     * Debit `intMs` of burn at `gph` from the tanks. If the pilot switched tanks
+     * inside the interval, the burn is split at the switch point instead of being
+     * credited to whichever tank is active now. Sets last_sample_at / last_burn_at
+     * and the imbalance flag. Returns false if a debit was refused (invalid tank).
+     */
+    static _integrate(st, gph, intMs, nowMs, intervalStartMs) {
+        if (intMs > 0) {
+            const burned = gph * (intMs / 1000) / 3600;
+            const switchMs = st.tank_switched_at ? FuelTankState._ms(st.tank_switched_at) : null;
+            const preSwitchTank = st.pre_switch_tank;
+            st.pre_switch_tank = null; // consume regardless of outcome below
+            const lenMs = nowMs - intervalStartMs;
+            if (preSwitchTank && Number.isFinite(switchMs) && lenMs > 0 &&
+                switchMs > intervalStartMs && switchMs < nowMs) {
+                const burnedPre = burned * ((switchMs - intervalStartMs) / lenMs);
+                if (!FuelTankState._debitTank(preSwitchTank, burnedPre)) return false;
+                if (!FuelTankState._debitActiveTank(burned - burnedPre)) return false;
+            } else if (!FuelTankState._debitActiveTank(burned)) {
+                return false;
+            }
+        }
+        st.last_sample_at = FuelTankState._iso(nowMs);
+        st.last_burn_at = st.last_sample_at;
+        const diff = Math.abs(st.left_gal - st.right_gal);
+        st.imbalance = (diff > FuelTankState.IMBALANCE_GAL && st.left_gal > 2 && st.right_gal > 2);
+        return true;
     }
 
     /**
@@ -408,17 +569,20 @@ class FuelTankState {
         return !!(FuelTankState._state && FuelTankState._state.dropped_burn_ambiguous);
     }
 
+
     /**
      * Fuel-flow data stopped (engine:stale / engine:disconnect) or froze (a frame
      * that is not EngineClient.edmCurrent). If the engine was running, the tracked
      * figure stops falling while fuel still burns, so it is marked at once
-     * (flow_lost_at → needsConfirmation() true) instead of 45 min later (STALE_MS).
-     * The engine counts as running when the last CURRENT frame this session had
-     * RPM > RUNNING_RPM_MIN, whatever its GPH (FF reads 0 at idle / taxi), or — with
-     * no current frame seen yet this session (`lastCurrentGph` null: app restarted
-     * with the data already frozen) — when burn was integrated within
-     * RECENT_BURN_MS. Engine off (last current RPM ≤ 300, even with residual flow,
-     * or nothing integrated recently) is not marked.
+     * (flow_lost_at, reason 'data' → needsConfirmation() true) instead of 45 min
+     * later (STALE_MS). Running: the last CURRENT frame this session had RPM >
+     * RUNNING_RPM_MIN, whatever its GPH (FF reads 0 at idle / taxi); with no current
+     * frame seen yet this session (`lastCurrentGph` null: app restarted with the data
+     * already frozen) the engine model says 'running' and was covered within
+     * RECENT_BURN_MS. Engine off (last current RPM ≤ 300, even with residual flow) is
+     * not marked. A stuck-sender mark ('zero_flow') becomes 'data': the data stopped.
+     * The engine model is set 'running' when marked; covered_at is not moved, so the
+     * outage is booked from the last frame.
      * @param {number} nowMs
      * @param {number|null} lastCurrentGph - GPH of the last current frame, null if none
      * @param {number} [lastCurrentRpm] - RPM of that frame (missing → not running)
@@ -428,154 +592,33 @@ class FuelTankState {
         FuelTankState._load();
         const st = FuelTankState._state;
         if (!st) return false;
-        if (st.flow_lost_at) return true;
-        // Running is decided by RPM only: the D-180 reads FF 0 at idle / taxi with the
-        // engine running (recorded flights; see noteEngineStopped), so an outage that
-        // starts in such a stretch must still be marked.
-        let running = lastCurrentGph != null && lastCurrentRpm > FuelTankState.RUNNING_RPM_MIN;
-        if (!running && lastCurrentGph == null && st.last_burn_at) {
-            const burnMs = new Date(st.last_burn_at).getTime();
-            running = Number.isFinite(burnMs) && (nowMs - burnMs) >= 0 &&
-                (nowMs - burnMs) <= FuelTankState.RECENT_BURN_MS;
-        }
-        if (!running) return false;
-        st.flow_lost_at = new Date(nowMs).toISOString();
-        st.flow_lost_reason = 'data';
-        FuelTankState._save();
-        FuelTankState._fire();
-        return true;
-    }
-
-    /** A finite RPM at or below RUNNING_RPM_MIN: the engine is stopped. */
-    static _isStoppedRpm(rpm) {
-        return typeof rpm === 'number' && Number.isFinite(rpm) && rpm <= FuelTankState.RUNNING_RPM_MIN;
-    }
-
-    /**
-     * A CURRENT engine frame shows the engine stopped (RPM <= RUNNING_RPM_MIN, even
-     * with residual fuel flow). Stopped/running is decided by RPM only, never by fuel
-     * flow: the recorded flights (~/engine_analysis, Nov 2026) show FF 0 at 1000-1900
-     * RPM with the engine running (11 of 126 files; 33 s at taxi in
-     * 20260130_KLKR-KUZA, two rows at 81 kt in 20261014), and no RPM <= 300 reading
-     * between RPM > 1500 readings in any file. Treating FF 0 as a stop would leave a
-     * data outage that starts in such a stretch unbooked (fuel reading high). Sets engine_stopped_at, so a gap before the next
-     * sample is not booked as dropped burn (onSample); the next sample with the
-     * engine running clears it.
-     *
-     * Exception — a stop seen right after an unobserved stretch that began with the
-     * engine burning does not cancel that stretch: the engine may have run for most
-     * of it (landed and shut down during a data outage, or the app was closed in
-     * flight). That is: burn was integrated (last_burn_at), no stop was seen, and
-     * there was no current frame for more than MAX_SAMPLE_DT_MS before this one
-     * (`prevFrameMs`, the previous current frame this app session; null after an app
-     * start, when last_sample_at is used instead). Then the figure is marked
-     * flow-lost (UNCONFIRMED; already so after a data outage with the engine
-     * running) and engine_stopped_at stays null, so the stretch is booked as dropped
-     * burn at the next sample (an over-estimate that includes engine-off time; the
-     * pilot reviews it before applying). While flow_lost_at is set, no stop is noted.
-     * @param {number} nowMs
-     * @param {number|null} prevFrameMs - time of the previous current frame, null if none
-     * @returns {boolean} true if the state now holds a stop (engine_stopped_at)
-     */
-    static noteEngineStopped(nowMs, prevFrameMs) {
-        FuelTankState._load();
-        const st = FuelTankState._state;
-        if (!st) return false;
-        if (!st.stop_seen_at) {
-            st.stop_seen_at = new Date(nowMs).toISOString();
-            FuelTankState._save();
-        }
-        if (st.flow_lost_at) return false;
-        if (st.engine_stopped_at) return true;
-        if (st.last_burn_at) {
-            const refMs = Number.isFinite(prevFrameMs) ? prevFrameMs
-                : (st.last_sample_at ? new Date(st.last_sample_at).getTime() : NaN);
-            if (!(nowMs - refMs <= FuelTankState.MAX_SAMPLE_DT_MS)) {
-                st.flow_lost_at = new Date(nowMs).toISOString();
+        if (!st.engine) st.engine = FuelTankState._migrateEngine(st, nowMs);
+        if (st.flow_lost_at) {
+            if (st.flow_lost_reason === 'zero_flow') {
                 st.flow_lost_reason = 'data';
                 FuelTankState._save();
                 FuelTankState._fire();
-                return false;
             }
+            return true;
         }
-        st.engine_stopped_at = new Date(nowMs).toISOString();
+        let running;
+        if (lastCurrentGph != null) {
+            running = lastCurrentRpm > FuelTankState.RUNNING_RPM_MIN;
+        } else {
+            const covMs = FuelTankState._ms(st.engine.covered_at);
+            running = st.engine.state === 'running' && Number.isFinite(covMs) &&
+                nowMs - covMs >= 0 && nowMs - covMs <= FuelTankState.RECENT_BURN_MS;
+        }
+        if (!running) return false;
+        st.flow_lost_at = FuelTankState._iso(nowMs);
+        st.flow_lost_reason = 'data';
+        if (st.engine.state !== 'running') {
+            st.engine.state = 'running';
+            st.engine.since = FuelTankState._iso(nowMs);
+        }
         FuelTankState._save();
+        FuelTankState._fire();
         return true;
-    }
-
-    /**
-     * A CURRENT engine frame shows the engine running (RPM > RUNNING_RPM_MIN),
-     * whatever the fuel flow reads: the sender reads 0 at idle (recorded flights show
-     * up to 30+ s of FF 0 at 1000-1800 RPM on the ground). At an engine start — a
-     * stop noted (engine_stopped_at) or nothing burned since init() (last_burn_at
-     * null) — the start becomes the reference for later gaps: engine_stopped_at is
-     * cleared and last_sample_at / last_burn_at are set to now. So a data outage
-     * after the start, before the first frame with flow, is still booked as dropped
-     * burn from the start (not from the shutdown or the tic). No-op otherwise, and
-     * while requires_confirm is set (onSample integrates nothing then), except that
-     * stop_seen_at is always cleared (the engine is running now).
-     * @param {number} nowMs
-     */
-    static noteEngineRunning(nowMs) {
-        FuelTankState._load();
-        const st = FuelTankState._state;
-        if (!st) return;
-        if (st.stop_seen_at) {
-            st.stop_seen_at = null;
-            FuelTankState._save();
-        }
-        if (st.requires_confirm) return;
-        if (!st.engine_stopped_at && st.last_burn_at) return;
-        const iso = new Date(nowMs).toISOString();
-        st.engine_stopped_at = null;
-        st.last_sample_at = iso;
-        st.last_burn_at = iso;
-        FuelTankState._save();
-    }
-
-    /**
-     * A CURRENT frame with the engine running (RPM > RUNNING_RPM_MIN) and fuel flow 0:
-     * the D-180 reads 0 at idle / taxi (recorded flights: up to ~60 s at 1000-1900
-     * RPM). It is a sensor reading, not a dropout: if it follows the last integrated
-     * sample (or the previous such frame) within MAX_SAMPLE_DT_MS, coverage moves on
-     * (_coveredMs) and the next sample with flow books no gap for it. After a longer
-     * gap, or while flow is lost (flow_lost_at), coverage does not move, so the
-     * outage is booked at the next sample with flow (the FF-0 frames after it
-     * included: an over-estimate). last_sample_at is not touched.
-     *
-     * Stuck sender: once the unbroken FF-0 stretch has lasted more than
-     * ZERO_FLOW_MAX_MS since the last integrated sample (last_sample_at), it is
-     * implausible as a reading: flow is marked lost (flow_lost_at → UNCONFIRMED at
-     * once) and coverage is dropped, so when real flow returns onSample books the
-     * whole stretch since the last integrated sample as dropped burn, as for an
-     * outage. Shorter stretches book nothing.
-     * @param {number} nowMs
-     */
-    static noteZeroFlowFrame(nowMs) {
-        FuelTankState._load();
-        const st = FuelTankState._state;
-        if (!st || st.requires_confirm || st.flow_lost_at) return;
-        const lastMs = st.last_sample_at ? new Date(st.last_sample_at).getTime() : NaN;
-        let refMs = lastMs;
-        const covMs = FuelTankState._coveredMs;
-        if (Number.isFinite(covMs) && !(covMs <= refMs)) refMs = covMs;
-        const tooLong = Number.isFinite(lastMs) && (nowMs - lastMs) > FuelTankState.ZERO_FLOW_MAX_MS;
-        const covered = Number.isFinite(refMs) && nowMs >= refMs &&
-            (nowMs - refMs) <= FuelTankState.MAX_SAMPLE_DT_MS;
-        // Coverage broken but the engine is known to have been burning (e.g. the app
-        // restarted mid-stretch: _coveredMs is in memory only). After a tic or a seen
-        // stop, noteEngineRunning() set last_sample_at to the engine start, so this
-        // also counts only time since the start.
-        const burning = !!st.last_burn_at && !st.engine_stopped_at;
-        if (tooLong && (covered || burning)) {
-            FuelTankState._coveredMs = null;
-            st.flow_lost_at = new Date(nowMs).toISOString();
-            st.flow_lost_reason = 'zero_flow';
-            FuelTankState._save();
-            FuelTankState._fire();
-            return;
-        }
-        if (covered) FuelTankState._coveredMs = nowMs;
     }
 
     /** Why flow is lost: 'zero_flow' (stuck sender), 'data' (engine data lost; also
@@ -597,15 +640,17 @@ class FuelTankState {
     static getState() {
         FuelTankState._load();
         FuelTankState._checkStaleness();
-        return FuelTankState._state ? { ...FuelTankState._state } : null;
+        const st = FuelTankState._state;
+        return st ? { ...st, engine: st.engine ? { ...st.engine } : st.engine } : null;
     }
 
     /**
      * True if pilot confirmation is required before trusting state.
      * True when: no state exists, requires_confirm flag is set, the last sample is
      * stale (STALE_MS), or fuel-flow data is lost with the engine running
-     * (flow_lost_at, markFlowLost). Only requires_confirm stops burn integration;
-     * flow_lost_at clears itself on the next integrated sample.
+     * (flow_lost_at). Only requires_confirm stops burn integration (the burn is then
+     * kept as unbooked running time); flow_lost_at clears at the next frame with
+     * flow.
      */
     static needsConfirmation() {
         FuelTankState._load();
@@ -616,9 +661,11 @@ class FuelTankState {
 
     /** Pilot has confirmed the current state is accurate. */
     static markConfirmed() {
-        // Deliberately leaves flow_lost_at alone: this confirms the tank SELECTION
-        // ("Still on LEFT tank?" YES, also auto-fired after 60 s), not the quantity.
-        // Lost-flow marking clears only on the next integrated sample or init().
+        // Confirms the tank SELECTION ("Still on LEFT tank?" YES, also auto-fired
+        // after 60 s) and clears requires_confirm; resets last_sample_at for the
+        // STALE_MS rule only. It never touches the engine model: gap booking and
+        // the stuck-sender timing use engine.covered_at / zero_flow_since, and
+        // flow_lost_at clears only at the next frame with flow or init().
         FuelTankState._load();
         if (!FuelTankState._state) return;
         FuelTankState._state.requires_confirm = false;

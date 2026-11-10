@@ -48,7 +48,6 @@ function restartApp() {
     widget.destroy();
     FuelTankState._state = null;
     FuelTankState._loaded = false;
-    FuelTankState._coveredMs = null;   // a real app restart loses it
     mount();
 }
 
@@ -59,7 +58,6 @@ beforeEach(() => {
     Settings.fuelManualOverride = null;
     FuelTankState._state = null;
     FuelTankState._loaded = false;
-    FuelTankState._coveredMs = null;   // a real app restart loses it
     globalThis.CockpitConfig = {
         get: () => null,
         aircraft: (p) => (p === 'performance.fuel_capacity_gal' ? 36
@@ -127,18 +125,18 @@ describe('F1: shutdown and restart', () => {
         FuelTankState.init(18, 18, 'L');
         run(60);                               // flight
         run(10, 0, 0);                         // shutdown
-        expect(FuelTankState.getState().engine_stopped_at).toBeTruthy();
+        expect(FuelTankState.getState().engine.state).toBe('off');
         at(NOW + 40 * MIN);
         run(30, 6, 1000);
         expect(dropped()).toBe(0);
-        expect(FuelTankState.getState().engine_stopped_at).toBeNull();   // cleared by a running sample
+        expect(FuelTankState.getState().engine.state).toBe('running');
     });
 
     it('residual FF 0.7 with RPM 0 at shutdown is a stop (and does not clear it)', () => {
         FuelTankState.init(18, 18, 'L');
         run(60);
         run(10, 0.7, 0);                       // residual flow, engine stopped
-        expect(FuelTankState.getState().engine_stopped_at).toBeTruthy();
+        expect(FuelTankState.getState().engine.state).toBe('off');
         at(NOW + 40 * MIN);
         run(30, 6, 1000);
         expect(dropped()).toBe(0);
@@ -194,10 +192,11 @@ describe('F1: real gaps are still booked', () => {
         at(NOW + 10 * MIN);
         run(5, 0, 0);                          // landed and shut down during the outage
         expect(FuelTankState.isFlowLost()).toBe(true);   // still UNCONFIRMED
-        expect(FuelTankState.getState().engine_stopped_at ?? null).toBeNull();
+        expect(FuelTankState.getState().engine.pending_gap_ms).toBeGreaterThan(9 * MIN);   // outage kept unbooked
         at(NOW + 20 * MIN);
         run(1, 6, 1000);
-        expect(dropped()).toBeGreaterThan(1);  // booked on restart (over-estimate, pilot reviews it)
+        // booked on restart at the restart GPH: the outage only (10 min + 1 s), not the engine-off time
+        expect(dropped()).toBeCloseTo(6 * (601 - 10) / 3600, 4);
     });
 
     it('app killed in flight, restarted after landing with the engine stopped: gap marked and booked on restart', () => {
@@ -206,12 +205,11 @@ describe('F1: real gaps are still booked', () => {
         widget.destroy();
         FuelTankState._state = null;
         FuelTankState._loaded = false;
-        FuelTankState._coveredMs = null;   // a real app restart loses it
         at(NOW + 30 * MIN);                    // app dead; plane lands and shuts down
         mount();
         run(3, 0, 0);
         expect(FuelTankState.isFlowLost()).toBe(true);
-        expect(FuelTankState.getState().engine_stopped_at ?? null).toBeNull();
+        expect(FuelTankState.getState().engine.pending_gap_ms).toBeGreaterThan(29 * MIN);
         at(NOW + 10 * MIN);
         run(1, 6, 1000);
         expect(dropped()).toBeGreaterThan(1);
@@ -221,7 +219,7 @@ describe('F1: real gaps are still booked', () => {
         FuelTankState.init(18, 18, 'L');
         run(60);
         run(30, 0, 2400);                      // sender reads 0, engine at cruise RPM
-        expect(FuelTankState.getState().engine_stopped_at ?? null).toBeNull();
+        expect(FuelTankState.getState().engine.state).toBe('running');
         run(1);
         expect(dropped()).toBe(0);
     });
@@ -257,7 +255,7 @@ describe('F1: engine start with the fuel-flow sender reading 0 at idle (seen in 
         run(5, 0, 0);                          // shutdown
         at(NOW + 40 * MIN);
         run(20, 0, 1000);                      // started; sender reads 0 at idle
-        expect(FuelTankState.getState().engine_stopped_at).toBeNull();
+        expect(FuelTankState.getState().engine.state).toBe('running');
         client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
         at(NOW + 5 * MIN);
         run(1);
@@ -363,7 +361,6 @@ describe('F1 ruling 2: init() keeps the engine-running knowledge', () => {
         widget.destroy();
         FuelTankState._state = null;
         FuelTankState._loaded = false;
-        FuelTankState._coveredMs = null;   // a real app restart loses it
         at(NOW + 20 * MIN);
         mount();
         run(3, 0, 0);
@@ -388,7 +385,7 @@ describe('review I1: data back after an outage with the engine stopped and resid
         expect(st.dropped_burn_estimate_gal).toBe(0);
         expect(st.left_gal + st.right_gal).toBe(before.left_gal + before.right_gal);
         expect(st.last_burn_at).toBe(before.last_burn_at);
-        expect(st.engine_stopped_at ?? null).toBeNull();
+        expect(st.engine.pending_gap_ms).toBeGreaterThan(19 * MIN);
     });
 
     it('then a restart without a tic books the outage like the FF-0 return case', () => {
@@ -409,7 +406,6 @@ describe('review I1: data back after an outage with the engine stopped and resid
         widget.destroy();
         FuelTankState._state = null;
         FuelTankState._loaded = false;
-        FuelTankState._coveredMs = null;   // a real app restart loses it
         at(NOW + 30 * MIN);
         mount();
         run(3, 0.7, 0);
@@ -417,7 +413,7 @@ describe('review I1: data back after an outage with the engine stopped and resid
         expect(dropped()).toBe(0);
     });
 
-    it('direct onSample at RPM 0 after a burning gap (no noteEngineStopped first): skipped, nothing booked', () => {
+    it('direct onSample at RPM 0 after a burning gap: skipped, nothing booked', () => {
         FuelTankState.init(18, 18, 'L');
         const t0 = Date.now();
         FuelTankState.onSample(9, t0 + 1000, 2400);
@@ -508,7 +504,11 @@ describe('stuck fuel-flow sender: FF 0 with the engine running for more than 90 
         expect(FuelTankState.flowLostReason()).toBeNull();
         run(95, 0, 2400);
         expect(FuelTankState.flowLostReason()).toBe('zero_flow');
+        // A re-entry does not fix a stuck sender: still flow-lost (ruling: init during
+        // an ongoing outage with the engine running keeps UNCONFIRMED) until flow returns.
         FuelTankState.init(10, 10, 'L');
+        expect(FuelTankState.flowLostReason()).toBe('zero_flow');
+        run(1);
         expect(FuelTankState.flowLostReason()).toBeNull();
     });
 });

@@ -56,7 +56,6 @@ describe('FuelTankState', () => {
             // survives a save/load round trip, markConfirmed and switchTank
             FuelTankState.markConfirmed();
             FuelTankState._loaded = false;
-            FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
             FuelTankState._load();
             expect(FuelTankState.getState().burned_since_init_gal).toBeCloseTo(1.525, 6);
             FuelTankState.init(10, 10, 'L');
@@ -145,20 +144,20 @@ describe('FuelTankState', () => {
             expect(st.left_gal).toBeCloseTo(18 - 10 * (10 / 3600), 6);
         });
 
-        it('F1: after noteEngineStopped the next gap is engine-off time, not dropped burn', () => {
+        it('F1: after a stopped frame the next gap is engine-off time, not dropped burn', () => {
             const FuelTankState = freshFuelTankState();
             global.CockpitConfig = { aircraft: () => 36 };
             FuelTankState.init(18, 18, 'L');
             const t0 = new Date(FuelTankState.getState().last_sample_at).getTime();
-            FuelTankState.onSample(10, t0 + 1000, 2400);
-            expect(FuelTankState.noteEngineStopped(t0 + 2000, t0 + 1000)).toBe(true);
-            FuelTankState.onSample(0.7, t0 + 3000, 0);        // residual flow: stop kept
-            expect(FuelTankState.getState().engine_stopped_at).toBeTruthy();
-            FuelTankState.onSample(6, t0 + 40 * 60000, 1000);
+            FuelTankState.onFrame(t0 + 1000, 10, 2400);
+            FuelTankState.onFrame(t0 + 2000, 0, 0);            // stopped
+            FuelTankState.onSample(0.7, t0 + 3000, 0);         // residual flow: still off
+            expect(FuelTankState.getState().engine.state).toBe('off');
+            FuelTankState.onFrame(t0 + 40 * 60000, 6, 1000);
             expect(FuelTankState.getState().dropped_burn_estimate_gal).toBe(0);
-            expect(FuelTankState.getState().engine_stopped_at).toBeNull();
+            expect(FuelTankState.getState().engine.state).toBe('running');
             // and the next real gap is booked again
-            FuelTankState.onSample(6, t0 + 40 * 60000 + 70000, 2400);
+            FuelTankState.onFrame(t0 + 40 * 60000 + 70000, 6, 2400);
             expect(FuelTankState.getState().dropped_burn_estimate_gal).toBeCloseTo(6 * 60 / 3600, 6);
         });
 
@@ -169,7 +168,9 @@ describe('FuelTankState', () => {
             const st = FuelTankState.getState();
             expect(st.last_sample_at).toBe(st.initialized_at);
             expect(st.last_burn_at).toBeNull();
-            expect(st.engine_stopped_at).toBeNull();
+            expect(st.engine.state).toBe('unknown');
+            expect(st.engine.covered_at).toBe(st.initialized_at);
+            expect(st.engine.pending_gap_ms).toBe(0);
             expect(st.gap_burn_since_init_gal).toBe(0);
         });
 
@@ -377,7 +378,6 @@ describe('FuelTankState', () => {
             };
             localStorage.setItem(FuelTankState.STORAGE_KEY, JSON.stringify(switched));
             FuelTankState._loaded = false;
-            FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
 
             // Next telemetry sample arrives 7s after the switch (10s after the last real sample).
             FuelTankState.onSample(10, switchAt + 7000);

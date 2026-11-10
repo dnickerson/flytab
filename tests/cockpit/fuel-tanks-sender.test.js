@@ -40,7 +40,6 @@ function senderText(trackedL, trackedR, data, { threshold = THRESHOLD_GAL } = {}
     localStorage.clear();
     FuelTankState._state = null;
     FuelTankState._loaded = false;
-    FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
     if (trackedL === null) {
         FuelTankState._loaded = true;   // loaded, but nothing tracked
     } else {

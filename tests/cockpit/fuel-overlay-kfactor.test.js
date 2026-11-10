@@ -81,7 +81,6 @@ beforeEach(() => {
     Settings.fuelManualOverride = null;
     FuelTankState._state = null;
     FuelTankState._loaded = false;
-    FuelTankState._coveredMs = null;   // in memory only: a real app restart loses it
     globalThis.CockpitConfig = {
         get: () => null,
         aircraft: (p) => {

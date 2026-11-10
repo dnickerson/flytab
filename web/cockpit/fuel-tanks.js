@@ -23,7 +23,6 @@ class FuelTanksDisplay {
         // flow data stopped or froze.
         this._lastCurrentGph = null;
         this._lastCurrentRpm = 0;      // RPM of that frame (markFlowLost needs > 300)
-        this._lastCurrentFrameAt = null; // Date.now() of that frame (FuelTankState.noteEngineStopped)
         this._revealUntil = 0;         // revealTankControl(): badge taps never open the quantity dialog until then
         this._initPanelMode = null;   // 'preflight' | 'recovery' | null (panel closed)
         this._initPanelDirty = false;  // set to true while user is editing, prevents live updates from clobbering
@@ -198,24 +197,10 @@ class FuelTanksDisplay {
             this._lastCurrentGph = Number.isFinite(n) ? n : 0;
             const r = Number(d.RPM ?? d.rpm);
             this._lastCurrentRpm = Number.isFinite(r) ? r : 0;
-            // Engine stopped (RPM <= 300, even with residual flow): a gap before the
-            // next sample is engine-off time, not dropped burn. Noted before
-            // onSample so the residual-flow sample of this same frame cannot clear it.
-            // A missing RPM is not taken as a stop. RPM only, never fuel flow: recorded
-            // flights show FF 0 at 1000-1900 RPM with the engine running (see
-            // FuelTankState.noteEngineStopped).
-            // Engine running (RPM > 300, even with the sender reading 0 at idle): at an
-            // engine start this makes the start the reference for later gaps.
-            if (Number.isFinite(r) && r <= FuelTankState.RUNNING_RPM_MIN) {
-                FuelTankState.noteEngineStopped(now, this._lastCurrentFrameAt);
-            } else if (Number.isFinite(r)) {
-                FuelTankState.noteEngineRunning(now);
-            }
-            if (gph > 0) FuelTankState.onSample(gph, now, Number.isFinite(r) ? r : undefined);
-            // FF 0 with the engine running is a sensor reading (D-180 at idle / taxi),
-            // not a dropout: no gap is booked for it.
-            else if (Number.isFinite(r) && r > FuelTankState.RUNNING_RPM_MIN) FuelTankState.noteZeroFlowFrame(now);
-            this._lastCurrentFrameAt = now;
+            // One engine-model transition per current frame (FuelTankState.onFrame):
+            // RPM decides running vs stopped, never fuel flow; frames with flow
+            // integrate burn and book any unbooked running time.
+            FuelTankState.onFrame(now, gph, Number.isFinite(r) ? r : undefined);
         } else {
             // Burn is not being integrated. If the engine was running, the tracked
             // figure now reads high: mark it UNCONFIRMED at once (cleared by the next
