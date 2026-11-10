@@ -3186,10 +3186,7 @@ class RouteTable {
         const cruiseSpeed = gs > 30 ? gs : (CockpitConfig.aircraft('performance.cruise_speed_kt') || 120);
         const remainEte = cruiseSpeed > 0 ? (remainDist / cruiseSpeed * 60) : 0;
 
-        // Format ETE
-        const eteH = Math.floor(remainEte / 60);
-        const eteM = Math.round(remainEte % 60);
-        const eteFmt = eteH > 0 ? `${eteH}:${String(eteM).padStart(2, '0')}` : `${eteM}m`;
+        const eteFmt = RouteTable._formatEte(remainEte);
 
         // Total fuel burn from flight computations
         let totalFuelBurn = 0;
@@ -3851,8 +3848,15 @@ class RouteTable {
 
     _formatTime(minutes) {
         if (!minutes || minutes <= 0) return '\u2014';
-        const h = Math.floor(minutes / 60);
-        const m = Math.round(minutes % 60);
+        return RouteTable._formatEte(minutes);
+    }
+
+    /** Minutes → "H:MM", or "Mm" under an hour. The total is rounded first, so
+     *  119.6 min is "2:00" (splitting with floor/round showed "1:60"). */
+    static _formatEte(minutes) {
+        const total = Math.round(minutes);
+        const h = Math.floor(total / 60);
+        const m = total % 60;
         return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}m`;
     }
 

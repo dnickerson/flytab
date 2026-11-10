@@ -2408,12 +2408,7 @@ class FlyTabApp {
         const hasPreset = wp.fuel_add_gal != null;
         const presetGal = hasPreset ? (wp._fuelAdded ?? wp.fuel_add_gal) : null;
 
-        const fmtEte = (min) => {
-            if (min == null) return '\u2014';
-            const h = Math.floor(min / 60);
-            const m = Math.round(min % 60);
-            return h > 0 ? `${h}h\u2009${m}m` : `${m}m`;
-        };
+        const fmtEte = (min) => FlyTabApp.fmtEteHm(min);
         const fmtDist = (nm) => (nm != null ? `${nm}` : '\u2014');
 
         const nextDest  = nextFlight?.dest  ?? '\u2014';
@@ -2606,6 +2601,16 @@ class FlyTabApp {
     }
 
     /** One AppHealth renderer event, for the diagnostic log. */
+    /** Minutes → "Hh Mm" (thin space) or "Mm"; '—' for null. The total is rounded
+     *  first, so 119.6 min is "2h 0m" (floor/round on the parts showed "1h 60m"). */
+    static fmtEteHm(min) {
+        if (min == null) return '\u2014';
+        const total = Math.round(min);
+        const h = Math.floor(total / 60);
+        const m = total % 60;
+        return h > 0 ? `${h}h\u2009${m}m` : `${m}m`;
+    }
+
     static describeRendererEvent(e) {
         const t = new Date(e.at), p = (n) => String(n).padStart(2, '0');
         const when = `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
