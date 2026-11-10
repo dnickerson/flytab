@@ -2959,13 +2959,6 @@ class RoutePlannerPanel {
 
     // ── REV ───────────────────────────────────────────────────────────────────
 
-    /** Hours → "H:MM" (style 'colon') or "Hh MMm" (style 'hm'), via FuelEngine.formatHm
-     *  (total minutes rounded first: 1.995 h is "2:00" / "2h 00m", never "1:60").
-     *  @param {number} hrs  @param {'colon'|'hm'} style */
-    static fmtHrs(hrs, style) {
-        return FuelEngine.formatHm(hrs, 'hr', style === 'hm' ? 'hm' : 'colon');
-    }
-
     /**
      * The route reversed, as new pills (`route` is not modified), or null with
      * fewer than two points. Dropped: everything after the dest pill (missed
@@ -3536,6 +3529,13 @@ class RoutePlannerPanel {
     }
 
     // ── Utilities ─────────────────────────────────────────────────────────────
+
+    /** Hours → "H:MM" (style 'colon') or "Hh MMm" (style 'hm'), via FuelEngine.formatHm
+     *  (total minutes rounded first: 1.995 h is "2:00" / "2h 00m", never "1:60").
+     *  @param {number} hrs  @param {'colon'|'hm'} style */
+    static fmtHrs(hrs, style) {
+        return FuelEngine.formatHm(hrs, 'hr', style === 'hm' ? 'hm' : 'colon');
+    }
 
     _toast(msg, duration = 2500) {
         const host = this._el || document.body;

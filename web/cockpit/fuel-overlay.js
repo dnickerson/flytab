@@ -687,7 +687,7 @@ class FuelOverlay {
             FuelState.saveMeasurement(m);
             if (typeof FuelTankState !== 'undefined') {
                 const existing = FuelTankState.getState();
-                FuelTankState.init(m.left_gal, m.right_gal, existing?.active_tank ?? 'L');
+                FuelTankState.init(m.left_gal, m.right_gal, existing?.active_tank ?? 'L', 'tic');
                 m.tank_init_at = FuelTankState.getState()?.initialized_at ?? null;
                 // Belt-and-suspenders: re-dispatch so the gauge widget re-renders even
                 // if the synchronous dispatch inside init() was swallowed by the WebView.
@@ -830,7 +830,7 @@ class FuelOverlay {
             const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
             const existingTank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
             if (typeof FuelTankState !== 'undefined') {
-                FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L');
+                FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L', 'fuel_stop');
                 m.tank_init_at = FuelTankState.getState()?.initialized_at ?? null;
             } else {
                 m.tank_init_at = null;

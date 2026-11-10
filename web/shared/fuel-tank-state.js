@@ -161,11 +161,23 @@ class FuelTankState {
      *    'unknown'; flow-lost cleared.
      * In every case covered_at = now and pending_gap_ms = 0: the entered quantity
      * replaces anything unbooked before it.
+     *
+     * `source` narrows the carry for ground measurements (a tic is a dipstick
+     * reading on the ground, a fuel stop is on the ground):
+     *  - 'fuel_stop' (RECORD FUEL STOP): never carries;
+     *  - 'tic' (APPLY TIC): carries only 'running' with no outage and covered within
+     *    STALE_MS (an unseen shutdown with the app closed: the documented known
+     *    limit); an outage is never carried (Pi off before the engine);
+     *  - 'reentry' (widget SET / recovery CONFIRM, in flight) and a missing or
+     *    unknown source: the rules above. Missing = in-flight rules on purpose: a
+     *    caller that forgets the source can at worst offer a false correction the
+     *    pilot reviews, never silently lose real burn.
      * @param {number} leftGal
      * @param {number} rightGal
      * @param {'L'|'R'} activeTank - this airframe has no BOTH selector position
+     * @param {'tic'|'fuel_stop'|'reentry'} [source]
      */
-    static init(leftGal, rightGal, activeTank = 'L') {
+    static init(leftGal, rightGal, activeTank = 'L', source) {
         const nowMs = Date.now();
         const now = FuelTankState._iso(nowMs);
         FuelTankState._load();
@@ -175,10 +187,11 @@ class FuelTankState {
         let since = now;
         let flowLostAt = null;
         let flowLostReason = null;
-        if (peng && peng.state === 'running') {
+        if (peng && peng.state === 'running' && source !== 'fuel_stop') {
             const lostMs = FuelTankState._ms(prior.flow_lost_at);
             const covMs = FuelTankState._ms(peng.covered_at);
-            if (Number.isFinite(lostMs) && nowMs - lostMs <= FuelTankState.OUTAGE_RUNNING_MAX_MS) {
+            if (source !== 'tic' && Number.isFinite(lostMs) &&
+                nowMs - lostMs <= FuelTankState.OUTAGE_RUNNING_MAX_MS) {
                 engState = 'running';
                 flowLostAt = prior.flow_lost_at;
                 flowLostReason = prior.flow_lost_reason === 'zero_flow' ? 'zero_flow' : 'data';

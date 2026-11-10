@@ -421,7 +421,7 @@ class FuelTanksDisplay {
         const leftGal = parseFloat(this._dom.initL.value);
         const rightGal = parseFloat(this._dom.initR.value);
         if (isNaN(leftGal) || isNaN(rightGal) || leftGal < 0 || rightGal < 0) return;
-        FuelTankState.init(leftGal, rightGal, this._initSelectedTank);
+        FuelTankState.init(leftGal, rightGal, this._initSelectedTank, 'reentry');
         this._dom.initPanel.style.display = 'none';
         this._initPanelDirty = false;
         this._initPanelMode = null;

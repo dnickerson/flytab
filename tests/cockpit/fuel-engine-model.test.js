@@ -337,3 +337,117 @@ describe('scenario harness', () => {
     S("R2 unseen shutdown, start FF 0 idle 20 min later (v13.7 reason: 'zero_flow')", () => { tic(); run(600); restartApp(); at(NOW + 20 * MIN); expect(firstLost(5, 0, 1000)).toBe(1); }, { dropped: 0, lost: true, reason: 'data' });
     S('R3 outage beginning in an FF-0 stretch, back at FF 0, then flow', () => { tic(); run(300); run(5, 0, 2400); stale(); expect(reason()).toBe('data'); at(NOW + 3 * MIN); expect(firstLost(5, 0, 2400)).toBe(1); run(3); }, { dropped: 0.44, lost: false });
 });
+
+/*
+ * init(…, source): APPLY TIC ('tic') and RECORD FUEL STOP ('fuel_stop') are ground
+ * measurements; widget SET / recovery CONFIRM ('reentry') are in-flight re-entries.
+ * A missing / unknown source gets the in-flight re-entry rules.
+ */
+describe('init source: ground measurements do not carry an outage', () => {
+    const outageThenLand = () => { FuelTankState.init(18, 18, 'L'); run(600); stale(); };
+
+    it('P1: Pi off before shutdown (stale), APPLY TIC 4 h later, Pi on 10 min later at RPM 0, start → 0, no UNCONFIRMED', () => {
+        outageThenLand();
+        at(NOW + 4 * 60 * MIN);
+        FuelTankState.init(18, 18, 'L', 'tic');
+        expect(FuelTankState.needsConfirmation()).toBe(false);
+        at(NOW + 10 * MIN);
+        run(600, 0, 0);
+        expect(lost()).toBe(false);
+        run(30, 7, 1100);
+        expect(dropped()).toBe(0);
+    });
+
+    it('P1b: same, tic then start 20 min later with no frames before', () => {
+        outageThenLand();
+        at(NOW + 4 * 60 * MIN);
+        FuelTankState.init(18, 18, 'L', 'tic');
+        at(NOW + 20 * MIN);
+        run(30, 7, 1100);
+        expect(dropped()).toBe(0);
+        expect(lost()).toBe(false);
+    });
+
+    it('P1c: same, Pi on (RPM 0) before the tic', () => {
+        outageThenLand();
+        at(NOW + 4 * 60 * MIN);
+        run(10, 0, 0);
+        FuelTankState.init(18, 18, 'L', 'tic');
+        expect(lost()).toBe(false);
+        at(NOW + 10 * MIN);
+        run(30, 7, 1100);
+        expect(dropped()).toBe(0);
+    });
+
+    it('X9b: outage, landing, APPLY TIC 20 min later (Pi off), Pi on 5 min later at RPM 0, start → 0, no UNCONFIRMED after the tic', () => {
+        outageThenLand();
+        at(NOW + 20 * MIN);
+        FuelTankState.init(10, 10, 'L', 'tic');
+        expect(FuelTankState.needsConfirmation()).toBe(false);
+        at(NOW + 5 * MIN);
+        run(600, 0, 0);
+        expect(lost()).toBe(false);
+        run(30, 7, 1100);
+        expect(dropped()).toBe(0);
+    });
+
+    it('RECORD FUEL STOP never carries, even right after an outage began', () => {
+        outageThenLand();
+        at(NOW + 2 * MIN);
+        FuelTankState.init(18, 18, 'L', 'fuel_stop');
+        expect(lost()).toBe(false);
+        expect(eng().state).toBe('unknown');
+        at(NOW + 10 * MIN);
+        run(30, 7, 1100);
+        expect(dropped()).toBe(0);
+    });
+
+    it('APPLY TIC within 45 min of the last frame after an unseen shutdown with no outage (app closed) still carries: the documented known limit (X4)', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(600);
+        restartApp();
+        at(NOW + 20 * MIN);
+        FuelTankState.init(18, 18, 'L', 'tic');
+        expect(eng().state).toBe('running');
+        at(NOW + 20 * MIN);
+        run(60, 7, 1100);
+        expect(dropped()).toBeCloseTo(2.316, 3);
+    });
+
+    it("an APPLY TIC more than 45 min after the last frame does not carry", () => {
+        FuelTankState.init(18, 18, 'L');
+        run(600);
+        restartApp();
+        at(NOW + 50 * MIN);
+        FuelTankState.init(18, 18, 'L', 'tic');
+        expect(eng().state).toBe('unknown');
+    });
+
+    it("widget SET / recovery CONFIRM ('reentry') keep the in-flight carry (F1, F2)", () => {
+        outageThenLand();
+        at(NOW + 50 * MIN);
+        FuelTankState.init(15, 15, 'L', 'reentry');
+        expect(lost()).toBe(true);
+        at(NOW + 20 * MIN);
+        run(3);
+        expect(dropped()).toBeCloseTo(gphGal(9, 20 * 60 + 1 - 10), 4);
+    });
+
+    it('missing or unknown source → in-flight re-entry rules (a caller that forgets it cannot lose real burn)', () => {
+        for (const src of [undefined, 'bogus']) {
+            outageThenLand();
+            at(NOW + 50 * MIN);
+            FuelTankState.init(15, 15, 'L', src);
+            expect(lost()).toBe(true);
+            run(1);
+        }
+    });
+
+    it('callers pass their source: APPLY TIC → tic, RECORD FUEL STOP → fuel_stop, widget SET / CONFIRM → reentry', () => {
+        const ov = read('web/cockpit/fuel-overlay.js');
+        expect(ov).toMatch(/FuelTankState\.init\(m\.left_gal, m\.right_gal, existing\?\.active_tank \?\? 'L', 'tic'\)/);
+        expect(ov).toMatch(/FuelTankState\.init\(leftGal, rightGal, existingTank\?\.active_tank \?\? 'L', 'fuel_stop'\)/);
+        expect(read('web/cockpit/fuel-tanks.js')).toMatch(/FuelTankState\.init\(leftGal, rightGal, this\._initSelectedTank, 'reentry'\)/);
+    });
+});
+
