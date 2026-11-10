@@ -177,14 +177,28 @@ describe('EngineMLBridge — payload field-name contract', () => {
         }));
     });
 
-    it('sends 0 fuel_remaining when only the capacity default is known (not a measurement)', async () => {
+    // F4: unknown fuel is -1, never 0. EngineAdvisor.java reads < 0 as unknown and
+    // skips the route advisory; 0 is a real (empty) figure.
+    it('sends -1 fuel_remaining (unknown) when only the capacity default is known (not a measurement)', async () => {
         setFuel({ gallons: 36, source: 'capacity', stale: false });
         await bridge._onEngineData({ ...ENGINE_FRAME, fuel: { fuel_remaining: 30 } });
-        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 0 }));
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: -1 }));
     });
 
-    it('sends 0 fuel_remaining for a stale (UNCONFIRMED) tracked figure, never the high number', async () => {
+    it('sends -1 fuel_remaining (unknown) for a stale (UNCONFIRMED) tracked figure, never the high number', async () => {
         setFuel({ gallons: 24.9, source: 'tank_state', stale: true });
+        await bridge._onEngineData(ENGINE_FRAME);
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: -1 }));
+    });
+
+    it('sends -1 fuel_remaining (unknown) when nothing is tracked (FuelState returns null)', async () => {
+        setFuel(null);
+        await bridge._onEngineData(ENGINE_FRAME);
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: -1 }));
+    });
+
+    it('sends a real tracked 0.0 as 0 (empty tanks), not as unknown', async () => {
+        setFuel({ gallons: 0, source: 'tank_state', stale: false });
         await bridge._onEngineData(ENGINE_FRAME);
         expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 0 }));
     });
