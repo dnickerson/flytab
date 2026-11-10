@@ -26,6 +26,12 @@ class FuelTankState {
     static _state = null;
     static _loaded = false;
     static _lastConfirmPromptAt = 0;
+    /** In memory only: time of the last current frame with the engine running and
+     *  FF 0 that continued unbroken coverage since the last integrated sample
+     *  (noteZeroFlowFrame). onSample measures its interval from it, so an FF-0
+     *  stretch books no gap. Lost on an app restart: then the interval runs from
+     *  last_sample_at (an over-estimate at worst). Not used for staleness. */
+    static _coveredMs = null;
 
     static _load() {
         if (FuelTankState._loaded) return;
@@ -100,6 +106,7 @@ class FuelTankState {
         // against, so fall back to L and make the pilot confirm rather than guessing.
         const validTank = (activeTank === 'L' || activeTank === 'R');
         FuelTankState._lastConfirmPromptAt = Date.now();
+        FuelTankState._coveredMs = null;
         const perSideCap = FuelTankState.perSideCapGal(Infinity);
         FuelTankState._state = {
             left_gal: Math.min(perSideCap, Math.max(0, leftGal)),
@@ -182,12 +189,23 @@ class FuelTankState {
 
     /**
      * Process one engine data sample. Integrates fuel flow against active tank.
-     * A gap longer than MAX_SAMPLE_DT_MS since last_sample_at integrates only the
-     * capped dt; the rest is added to dropped_burn_estimate_gal (the pilot's
-     * APPLY CORRECTION prompt) ONLY when the engine was burning at the last
-     * integrated sample (last_burn_at set — never right after init()) and no engine
-     * stop was seen since (engine_stopped_at null). Otherwise the gap was engine-off
-     * time and books nothing.
+     * The interval is measured from the later of last_sample_at and the last
+     * zero-flow running frame that continued unbroken coverage (noteZeroFlowFrame):
+     * current frames with FF 0 while the engine runs are a sensor reading (the D-180
+     * reads 0 at idle / taxi), not a dropout, so they are neither integrated nor
+     * booked as a gap.
+     * An interval longer than MAX_SAMPLE_DT_MS integrates only the capped dt; the
+     * rest is added to dropped_burn_estimate_gal (the pilot's APPLY CORRECTION
+     * prompt) ONLY when the engine was burning at the last integrated sample
+     * (last_burn_at set — never right after init() unless the engine was running
+     * then) and no engine stop was seen since (engine_stopped_at null). Otherwise
+     * the gap was engine-off time and books nothing.
+     *
+     * A sample whose RPM shows the engine stopped (residual flow) while flow is lost
+     * (flow_lost_at) or after a gap that would count as burning is skipped entirely:
+     * the outage is not booked at the residual GPH and flow_lost_at (UNCONFIRMED)
+     * stays until fuel is re-entered or the engine is restarted (then the outage is
+     * booked at the restart GPH).
      * @param {number} gph - Fuel flow in gallons per hour (must be > 0)
      * @param {number} nowMs - Current timestamp (Date.now())
      * @param {number} [rpm] - RPM of this frame. A finite RPM <= RUNNING_RPM_MIN
@@ -199,15 +217,21 @@ class FuelTankState {
         if (!FuelTankState._state || FuelTankState._state.requires_confirm) return;
         if (!gph || gph <= 0) return;
 
-        const lastMs = FuelTankState._state.last_sample_at
+        let lastMs = FuelTankState._state.last_sample_at
             ? new Date(FuelTankState._state.last_sample_at).getTime()
             : nowMs;
+        const covMs = FuelTankState._coveredMs;
+        if (Number.isFinite(covMs) && covMs > lastMs && covMs < nowMs) lastMs = covMs;
         const rawDtMs = nowMs - lastMs;
         const dtMs = Math.min(rawDtMs, FuelTankState.MAX_SAMPLE_DT_MS);
         if (dtMs <= 0) return;
 
         const droppedMs = rawDtMs - dtMs;
         const gapWasBurning = !!FuelTankState._state.last_burn_at && !FuelTankState._state.engine_stopped_at;
+        if (FuelTankState._isStoppedRpm(rpm) &&
+            (FuelTankState._state.flow_lost_at || (droppedMs > 0 && gapWasBurning))) {
+            return;
+        }
         if (droppedMs > 0 && gapWasBurning) {
             const droppedGal = gph * (droppedMs / 1000) / 3600;
             FuelTankState._state.dropped_burn_estimate_gal =
@@ -489,6 +513,30 @@ class FuelTankState {
         st.last_sample_at = iso;
         st.last_burn_at = iso;
         FuelTankState._save();
+    }
+
+    /**
+     * A CURRENT frame with the engine running (RPM > RUNNING_RPM_MIN) and fuel flow 0:
+     * the D-180 reads 0 at idle / taxi (recorded flights: up to ~60 s at 1000-1900
+     * RPM). It is a sensor reading, not a dropout: if it follows the last integrated
+     * sample (or the previous such frame) within MAX_SAMPLE_DT_MS, coverage moves on
+     * (_coveredMs) and the next sample with flow books no gap for it. After a longer
+     * gap, or while flow is lost (flow_lost_at), coverage does not move, so the
+     * outage is booked at the next sample with flow (the FF-0 frames after it
+     * included: an over-estimate). last_sample_at is not touched, so a sender stuck
+     * at 0 still goes stale (UNCONFIRMED) after STALE_MS.
+     * @param {number} nowMs
+     */
+    static noteZeroFlowFrame(nowMs) {
+        FuelTankState._load();
+        const st = FuelTankState._state;
+        if (!st || st.requires_confirm || st.flow_lost_at) return;
+        let refMs = st.last_sample_at ? new Date(st.last_sample_at).getTime() : NaN;
+        const covMs = FuelTankState._coveredMs;
+        if (Number.isFinite(covMs) && !(covMs <= refMs)) refMs = covMs;
+        if (Number.isFinite(refMs) && nowMs >= refMs && (nowMs - refMs) <= FuelTankState.MAX_SAMPLE_DT_MS) {
+            FuelTankState._coveredMs = nowMs;
+        }
     }
 
     /** True while fuel-flow data is lost with the engine running (markFlowLost). */

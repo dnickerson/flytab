@@ -214,13 +214,36 @@ describe('F1: real gaps are still booked', () => {
         expect(dropped()).toBeGreaterThan(1);
     });
 
-    it('a short FF-0 dropout while running still books its gap (not taken as a stop)', () => {
+    it('a 30 s FF-0 stretch at cruise RPM with current frames is a sensor reading: nothing booked, not a stop (review minor 2)', () => {
         FuelTankState.init(18, 18, 'L');
         run(60);
         run(30, 0, 2400);                      // sender reads 0, engine at cruise RPM
         expect(FuelTankState.getState().engine_stopped_at ?? null).toBeNull();
         run(1);
-        expect(dropped()).toBeCloseTo(9 * (31 - 10) / 3600, 4);
+        expect(dropped()).toBe(0);
+    });
+
+    it('60 s FF 0 at 1200 RPM with current frames, then flow: 0 booked (review minor 2)', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(60, 0, 1200);
+        const before = FuelTankState.getState();
+        run(1, 6, 1300);
+        const st = FuelTankState.getState();
+        expect(st.dropped_burn_estimate_gal).toBe(0);
+        expect(st.gap_burn_since_init_gal).toBe(0);
+        // only the 1 s since the last current frame is integrated
+        expect((before.left_gal + before.right_gal) - (st.left_gal + st.right_gal)).toBeCloseTo(6 / 3600, 6);
+    });
+
+    it('FF-0 stretch, then a real outage: only the outage (from the last current frame) is booked', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(40, 0, 1200);
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        at(NOW + 2 * MIN);
+        run(1);
+        expect(dropped()).toBeCloseTo(9 * (2 * 60 + 1 - 10) / 3600, 4);
     });
 });
 
@@ -235,8 +258,9 @@ describe('F1: engine start with the fuel-flow sender reading 0 at idle (seen in 
         client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
         at(NOW + 5 * MIN);
         run(1);
-        // engine start (first RPM > 300 frame) → resume: 19 s + 5 min + 1 s
-        expect(dropped()).toBeCloseTo(9 * (19 + 300 + 1 - 10) / 3600, 4);
+        // last current frame (FF 0 at idle) → resume: 5 min + 1 s (review minor 2:
+        // the FF-0 frames themselves are a sensor reading, not a gap)
+        expect(dropped()).toBeCloseTo(9 * (300 + 1 - 10) / 3600, 4);
     });
 
     it('after APPLY TIC: start, FF 0 at idle, data lost 5 min → booked from the start', () => {
@@ -246,7 +270,7 @@ describe('F1: engine start with the fuel-flow sender reading 0 at idle (seen in 
         client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
         at(NOW + 5 * MIN);
         run(1);
-        expect(dropped()).toBeCloseTo(9 * (19 + 300 + 1 - 10) / 3600, 4);
+        expect(dropped()).toBeCloseTo(9 * (300 + 1 - 10) / 3600, 4);
     });
 
     it('after APPLY TIC: a normal start with flow books nothing and integrates from the start', () => {
@@ -345,3 +369,55 @@ describe('F1 ruling 2: init() keeps the engine-running knowledge', () => {
         expect(dropped()).toBe(0);
     });
 });
+
+describe('review I1: data back after an outage with the engine stopped and residual flow', () => {
+    it('outage in flight → RPM 0 with FF 0.7: not integrated, nothing booked at 0.7, still UNCONFIRMED', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        const before = FuelTankState.getState();
+        at(NOW + 20 * MIN);
+        run(5, 0.7, 0);
+        const st = FuelTankState.getState();
+        expect(FuelTankState.needsConfirmation()).toBe(true);
+        expect(FuelTankState.isFlowLost()).toBe(true);
+        expect(st.dropped_burn_estimate_gal).toBe(0);
+        expect(st.left_gal + st.right_gal).toBe(before.left_gal + before.right_gal);
+        expect(st.last_burn_at).toBe(before.last_burn_at);
+        expect(st.engine_stopped_at ?? null).toBeNull();
+    });
+
+    it('then a restart without a tic books the outage like the FF-0 return case', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        at(NOW + 20 * MIN);
+        run(5, 0.7, 0);
+        at(NOW + 10 * MIN);
+        run(1, 6, 1000);
+        expect(dropped()).toBeGreaterThan(1);
+        expect(FuelTankState.isFlowLost()).toBe(false);
+    });
+
+    it('app closed in flight, reopened on the ground with residual flow at RPM 0: not integrated, UNCONFIRMED', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        widget.destroy();
+        FuelTankState._state = null;
+        FuelTankState._loaded = false;
+        at(NOW + 30 * MIN);
+        mount();
+        run(3, 0.7, 0);
+        expect(FuelTankState.isFlowLost()).toBe(true);
+        expect(dropped()).toBe(0);
+    });
+
+    it('direct onSample at RPM 0 after a burning gap (no noteEngineStopped first): skipped, nothing booked', () => {
+        FuelTankState.init(18, 18, 'L');
+        const t0 = Date.now();
+        FuelTankState.onSample(9, t0 + 1000, 2400);
+        FuelTankState.onSample(0.7, t0 + 20 * MIN, 0);
+        expect(FuelTankState.getState().dropped_burn_estimate_gal).toBe(0);
+    });
+});
+

@@ -212,6 +212,9 @@ class FuelTanksDisplay {
                 FuelTankState.noteEngineRunning(now);
             }
             if (gph > 0) FuelTankState.onSample(gph, now, Number.isFinite(r) ? r : undefined);
+            // FF 0 with the engine running is a sensor reading (D-180 at idle / taxi),
+            // not a dropout: no gap is booked for it.
+            else if (Number.isFinite(r) && r > FuelTankState.RUNNING_RPM_MIN) FuelTankState.noteZeroFlowFrame(now);
             this._lastCurrentFrameAt = now;
         } else {
             // Burn is not being integrated. If the engine was running, the tracked
