@@ -203,6 +203,31 @@ describe('EngineMLBridge — payload field-name contract', () => {
         expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: 0 }));
     });
 
+    // F4 contract on the simulateAnomaly() path too: no 20 gal substitution.
+    it('simulateAnomaly: unknown fuel (capacity default only) is sent as -1', async () => {
+        setFuel({ gallons: 36, source: 'capacity', stale: false });
+        await bridge.simulateAnomaly();
+        expect(processSampleSpy).toHaveBeenCalledWith(expect.objectContaining({ fuel_remaining: -1 }));
+    });
+
+    it('simulateAnomaly: nothing tracked (null) and a stale figure are sent as -1', async () => {
+        setFuel(null);
+        await bridge.simulateAnomaly();
+        expect(processSampleSpy).toHaveBeenLastCalledWith(expect.objectContaining({ fuel_remaining: -1 }));
+        setFuel({ gallons: 24.9, source: 'tank_state', stale: true });
+        await bridge.simulateAnomaly();
+        expect(processSampleSpy).toHaveBeenLastCalledWith(expect.objectContaining({ fuel_remaining: -1 }));
+    });
+
+    it('simulateAnomaly: a real tracked 0.0 is sent as 0, a measured figure as itself', async () => {
+        setFuel({ gallons: 0, source: 'tank_state', stale: false });
+        await bridge.simulateAnomaly();
+        expect(processSampleSpy).toHaveBeenLastCalledWith(expect.objectContaining({ fuel_remaining: 0 }));
+        setFuel({ gallons: 13.4, source: 'manual', stale: false });
+        await bridge.simulateAnomaly();
+        expect(processSampleSpy).toHaveBeenLastCalledWith(expect.objectContaining({ fuel_remaining: 13.4 }));
+    });
+
     it('reads fuel through FuelState.measuredGallons() (one helper, no private copy)', () => {
         const src = read('web/cockpit/engine-ml.js');
         expect(src).toMatch(/FuelState\.measuredGallons\(\)/);

@@ -258,7 +258,8 @@ class EngineMLBridge {
                     altitude:       num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft, 3000),
                     mp:             fakeFrame.manifold_pressure,
                     carb_temp:      num(d.carb_temp ?? d.Carb_Temp, 40),
-                    fuel_remaining: num(EngineMLBridge._measuredFuelGal(), 20),
+                    // F4 contract: -1 unknown, a real 0 as 0 (no simulated quantity).
+                    fuel_remaining: EngineMLBridge._measuredFuelGal(),
                     ground_speed:   num(sit?.ground_speed, 100),
                     distance_nm:    0,
                     phase:          (this._lastComputedPhase && this._lastComputedPhase !== 'shutdown') ? this._lastComputedPhase : (this._flightPhase ?? 'cruise'),
