@@ -411,6 +411,30 @@ class FuelTankState {
         return true;
     }
 
+    /**
+     * A CURRENT engine frame shows the engine running (RPM > RUNNING_RPM_MIN),
+     * whatever the fuel flow reads: the sender reads 0 at idle (recorded flights show
+     * up to 30+ s of FF 0 at 1000-1800 RPM on the ground). At an engine start — a
+     * stop noted (engine_stopped_at) or nothing burned since init() (last_burn_at
+     * null) — the start becomes the reference for later gaps: engine_stopped_at is
+     * cleared and last_sample_at / last_burn_at are set to now. So a data outage
+     * after the start, before the first frame with flow, is still booked as dropped
+     * burn from the start (not from the shutdown or the tic). No-op otherwise, and
+     * while requires_confirm is set (onSample integrates nothing then).
+     * @param {number} nowMs
+     */
+    static noteEngineRunning(nowMs) {
+        FuelTankState._load();
+        const st = FuelTankState._state;
+        if (!st || st.requires_confirm) return;
+        if (!st.engine_stopped_at && st.last_burn_at) return;
+        const iso = new Date(nowMs).toISOString();
+        st.engine_stopped_at = null;
+        st.last_sample_at = iso;
+        st.last_burn_at = iso;
+        FuelTankState._save();
+    }
+
     /** True while fuel-flow data is lost with the engine running (markFlowLost). */
     static isFlowLost() {
         FuelTankState._load();

@@ -98,12 +98,25 @@ describe('F1: engine start after APPLY TIC', () => {
         expect(dropped()).toBe(0);
     });
 
-    it('the first sample after init integrates at most the capped dt', () => {
+    it('the first frame after init is the engine start: nothing before it is integrated', () => {
         FuelTankState.init(18, 18, 'L');
         at(NOW + 20 * MIN);
         send(9, 2400, 0);
+        let st = FuelTankState.getState();
+        expect(st.left_gal + st.right_gal).toBe(36);
+        send(9, 2400);                         // next frame integrates its 1 s
+        st = FuelTankState.getState();
+        expect(36 - (st.left_gal + st.right_gal)).toBeCloseTo(9 * 1 / 3600, 6);
+        expect(st.dropped_burn_estimate_gal).toBe(0);
+    });
+
+    it('onSample called directly (no frame RPM) after init integrates at most the capped dt and books no gap', () => {
+        FuelTankState.init(18, 18, 'L');
+        at(NOW + 20 * MIN);
+        FuelTankState.onSample(9, NOW);
         const st = FuelTankState.getState();
         expect(36 - (st.left_gal + st.right_gal)).toBeCloseTo(9 * 10 / 3600, 6);
+        expect(st.dropped_burn_estimate_gal).toBe(0);
     });
 });
 
@@ -208,5 +221,40 @@ describe('F1: real gaps are still booked', () => {
         expect(FuelTankState.getState().engine_stopped_at ?? null).toBeNull();
         run(1);
         expect(dropped()).toBeCloseTo(9 * (31 - 10) / 3600, 4);
+    });
+});
+
+describe('F1: engine start with the fuel-flow sender reading 0 at idle (seen in recorded flights)', () => {
+    it('after a shutdown: start, FF 0 at idle, data lost 5 min, resumes in flight → booked from the start, not from the shutdown', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(5, 0, 0);                          // shutdown
+        at(NOW + 40 * MIN);
+        run(20, 0, 1000);                      // started; sender reads 0 at idle
+        expect(FuelTankState.getState().engine_stopped_at).toBeNull();
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        at(NOW + 5 * MIN);
+        run(1);
+        // engine start (first RPM > 300 frame) → resume: 19 s + 5 min + 1 s
+        expect(dropped()).toBeCloseTo(9 * (19 + 300 + 1 - 10) / 3600, 4);
+    });
+
+    it('after APPLY TIC: start, FF 0 at idle, data lost 5 min → booked from the start', () => {
+        FuelTankState.init(18, 18, 'L');
+        at(NOW + 20 * MIN);
+        run(20, 0, 1000);
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        at(NOW + 5 * MIN);
+        run(1);
+        expect(dropped()).toBeCloseTo(9 * (19 + 300 + 1 - 10) / 3600, 4);
+    });
+
+    it('after APPLY TIC: a normal start with flow books nothing and integrates from the start', () => {
+        FuelTankState.init(18, 18, 'L');
+        at(NOW + 20 * MIN);
+        run(1, 6, 1000);
+        const st = FuelTankState.getState();
+        expect(st.dropped_burn_estimate_gal).toBe(0);
+        expect(st.last_burn_at).toBeTruthy();
     });
 });

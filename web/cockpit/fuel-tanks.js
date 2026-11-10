@@ -202,8 +202,12 @@ class FuelTanksDisplay {
             // next sample is engine-off time, not dropped burn. Noted before
             // onSample so the residual-flow sample of this same frame cannot clear it.
             // A missing RPM is not taken as a stop.
+            // Engine running (RPM > 300, even with the sender reading 0 at idle): at an
+            // engine start this makes the start the reference for later gaps.
             if (Number.isFinite(r) && r <= FuelTankState.RUNNING_RPM_MIN) {
                 FuelTankState.noteEngineStopped(now, this._lastCurrentFrameAt);
+            } else if (Number.isFinite(r)) {
+                FuelTankState.noteEngineRunning(now);
             }
             if (gph > 0) FuelTankState.onSample(gph, now, Number.isFinite(r) ? r : undefined);
             this._lastCurrentFrameAt = now;
