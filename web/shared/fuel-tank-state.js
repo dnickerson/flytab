@@ -414,10 +414,11 @@ class FuelTankState {
      * figure stops falling while fuel still burns, so it is marked at once
      * (flow_lost_at → needsConfirmation() true) instead of 45 min later (STALE_MS).
      * The engine counts as running when the last CURRENT frame this session had
-     * GPH > 0 and RPM > RUNNING_RPM_MIN, or — with no current frame seen yet this
-     * session (`lastCurrentGph` null: app restarted with the data already frozen) —
-     * when burn was integrated within RECENT_BURN_MS. Engine off on the ground (last
-     * current GPH 0 or RPM ≤ 300, or nothing integrated recently) is not marked.
+     * RPM > RUNNING_RPM_MIN, whatever its GPH (FF reads 0 at idle / taxi), or — with
+     * no current frame seen yet this session (`lastCurrentGph` null: app restarted
+     * with the data already frozen) — when burn was integrated within
+     * RECENT_BURN_MS. Engine off (last current RPM ≤ 300, even with residual flow,
+     * or nothing integrated recently) is not marked.
      * @param {number} nowMs
      * @param {number|null} lastCurrentGph - GPH of the last current frame, null if none
      * @param {number} [lastCurrentRpm] - RPM of that frame (missing → not running)
@@ -428,7 +429,10 @@ class FuelTankState {
         const st = FuelTankState._state;
         if (!st) return false;
         if (st.flow_lost_at) return true;
-        let running = lastCurrentGph > 0 && lastCurrentRpm > FuelTankState.RUNNING_RPM_MIN;
+        // Running is decided by RPM only: the D-180 reads FF 0 at idle / taxi with the
+        // engine running (recorded flights; see noteEngineStopped), so an outage that
+        // starts in such a stretch must still be marked.
+        let running = lastCurrentGph != null && lastCurrentRpm > FuelTankState.RUNNING_RPM_MIN;
         if (!running && lastCurrentGph == null && st.last_burn_at) {
             const burnMs = new Date(st.last_burn_at).getTime();
             running = Number.isFinite(burnMs) && (nowMs - burnMs) >= 0 &&

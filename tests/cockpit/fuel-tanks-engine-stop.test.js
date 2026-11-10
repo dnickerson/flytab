@@ -513,3 +513,43 @@ describe('stuck fuel-flow sender: FF 0 with the engine running for more than 90 
     });
 });
 
+describe('markFlowLost: running decided by RPM only (R3)', () => {
+    it('outage starting during an FF-0 stretch at 1200 RPM → UNCONFIRMED at once, reason data', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(20, 0, 1200);
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        expect(FuelTankState.isFlowLost()).toBe(true);
+        expect(FuelTankState.flowLostReason()).toBe('data');
+    });
+
+    it('frozen frame after an FF-0 stretch at 1200 RPM → UNCONFIRMED at once', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(20, 0, 1200);
+        at(NOW + 1000);
+        client.dispatchEvent(new CustomEvent('engine:data', {
+            detail: { serial_connected: true, serial_warning: 'No EDM data for 6s', data: { Fuel_Flow: 0, RPM: 1200 } },
+        }));
+        expect(FuelTankState.isFlowLost()).toBe(true);
+    });
+
+    it('outage with the last current frame at RPM 0 (residual flow or not) → not marked', () => {
+        FuelTankState.init(18, 18, 'L');
+        run(60);
+        run(5, 0.7, 0);
+        client.dispatchEvent(new CustomEvent('engine:stale', { detail: { stale: true } }));
+        client.dispatchEvent(new CustomEvent('engine:disconnect'));
+        expect(FuelTankState.isFlowLost()).toBe(false);
+    });
+
+    it('unit: markFlowLost(now, 0, 1200) marks; (now, 0.7, 0) and (now, 9, 250) do not', () => {
+        FuelTankState.init(18, 18, 'L');
+        const t = Date.now();
+        expect(FuelTankState.markFlowLost(t, 0.7, 0)).toBe(false);
+        expect(FuelTankState.markFlowLost(t, 9, 250)).toBe(false);
+        expect(FuelTankState.markFlowLost(t, 0, undefined)).toBe(false);
+        expect(FuelTankState.markFlowLost(t, 0, 1200)).toBe(true);
+    });
+});
+
