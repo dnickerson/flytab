@@ -127,6 +127,13 @@ describe('EnginePage FUEL STATUS — canonical remaining fuel', () => {
         expect(out.range).toBe('270');        // 18 gal * 15 nm/gal
     });
 
+    it('ENDURANCE never shows 60 minutes: 1.995 h reads 2:00, not 1:60 (review I2)', () => {
+        setup({ tankL: 9, tankR: 8.955 });      // 17.955 gal / 9 gph = 1.995 h = 119.7 min
+        expect(fuelFields({ fuel_flow: 9 }).endurance).toBe('2:00');
+        setup({ tankL: 9, tankR: 8.91 });       // 17.91 / 9 = 1.99 h = 119.4 min
+        expect(fuelFields({ fuel_flow: 9 }).endurance).toBe('1:59');
+    });
+
     it('honours a manual fuel override ahead of tank state and EDM', () => {
         setup({ tankL: 10, tankR: 8, manual: 22 });
         const out = fuelFields({ Fuel_Remaining: 30, fuel_flow: 0 });

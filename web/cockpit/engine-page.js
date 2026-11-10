@@ -658,9 +658,11 @@ class EnginePage {
         }
 
         if (fuelFlow > 0 && fuelTracked) {
-            const endH = gallonsRem / fuelFlow;
-            const h = Math.floor(endH);
-            const m = Math.round((endH - h) * 60);
+            // Round the total minutes first: splitting the hours with floor/round
+            // showed 1.995 h as "1:60".
+            const endMin = Math.round(gallonsRem / fuelFlow * 60);
+            const h = Math.floor(endMin / 60);
+            const m = endMin % 60;
             this._setText('ep-fuel-end', `${h}:${String(m).padStart(2, '0')}`);
         } else {
             this._setText('ep-fuel-end', '-:--');

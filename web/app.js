@@ -2600,7 +2600,6 @@ class FlyTabApp {
         if (msg) this.showToast(msg);
     }
 
-    /** One AppHealth renderer event, for the diagnostic log. */
     /** Minutes → "Hh Mm" (thin space) or "Mm"; '—' for null. The total is rounded
      *  first, so 119.6 min is "2h 0m" (floor/round on the parts showed "1h 60m"). */
     static fmtEteHm(min) {
@@ -2611,6 +2610,7 @@ class FlyTabApp {
         return h > 0 ? `${h}h\u2009${m}m` : `${m}m`;
     }
 
+    /** One AppHealth renderer event, for the diagnostic log. */
     static describeRendererEvent(e) {
         const t = new Date(e.at), p = (n) => String(n).padStart(2, '0');
         const when = `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;

@@ -6,7 +6,7 @@
  * Real classes (new Function(src + 'return Class')), no fakes of the formatter.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, statSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -17,6 +17,7 @@ const InstrumentStrip     = new Function(read('web/cockpit/instrument-strip.js')
 const PowerTradeoff       = new Function(read('web/cockpit/power-tradeoff.js') + '\nreturn PowerTradeoff;')();
 const PositionHealthPanel = new Function(read('web/cockpit/position-health-panel.js') + '\nreturn PositionHealthPanel;')();
 const RouteTable          = new Function(read('web/cockpit/route-table.js') + '\nreturn RouteTable;')();
+const RoutePlannerPanel   = new Function(read('web/cockpit/route-planner-panel.js') + '\nreturn RoutePlannerPanel;')();
 
 function extractMethod(source, signature) {
     const start = source.indexOf(signature);
@@ -79,10 +80,33 @@ describe('h:mm formatters never show 60 minutes', () => {
         expect(fmtEteHm(null)).toBe('—');
     });
 
-    it('no formatter left with the floor/round split', () => {
-        for (const p of ['web/cockpit/instrument-strip.js', 'web/cockpit/power-tradeoff.js',
-                         'web/cockpit/route-table.js', 'web/cockpit/position-health-panel.js', 'web/app.js']) {
-            expect(read(p)).not.toMatch(/Math\.round\(\(?\s*[\w.]+\s*%\s*(60|3600)/);
+    it('RoutePlannerPanel.fmtHrs: route summary ETE "Xh MMm" and fuel-stop picker "H:MM" (review I2)', () => {
+        expect(RoutePlannerPanel.fmtHrs(1.995, 'hm')).toBe('2h 00m');
+        expect(RoutePlannerPanel.fmtHrs(1.99, 'hm')).toBe('1h 59m');
+        expect(RoutePlannerPanel.fmtHrs(0.5, 'hm')).toBe('0h 30m');
+        expect(RoutePlannerPanel.fmtHrs(1.995, 'colon')).toBe('2:00');
+        expect(RoutePlannerPanel.fmtHrs(3.25, 'colon')).toBe('3:15');
+        expect(RoutePlannerPanel.fmtHrs(0.999, 'colon')).toBe('1:00');
+    });
+
+    it('no formatter left with a floor/round split (any shape) in web/', () => {
+        const files = [];
+        const walk = (d) => {
+            for (const n of readdirSync(join(__dirname, '../../', d))) {
+                const rel = d + '/' + n;
+                if (rel === 'web/lib') continue;
+                if (statSync(join(__dirname, '../../', rel)).isDirectory()) walk(rel);
+                else if (n.endsWith('.js')) files.push(rel);
+            }
+        };
+        walk('web');
+        const bad = [];
+        for (const p of files) {
+            const src = read(p);
+            // round(x % 60) / round((x % 3600) / 60) and round((x - h) * 60)
+            if (/Math\.round\(\(?\s*[\w.]+\s*%\s*(60|3600)/.test(src)) bad.push(p + ' (% 60)');
+            if (/Math\.round\(\(\s*[\w.]+\s*-\s*[\w.]+\s*\)\s*\*\s*60\)/.test(src)) bad.push(p + ' ((x - h) * 60)');
         }
+        expect(bad).toEqual([]);
     });
 });
