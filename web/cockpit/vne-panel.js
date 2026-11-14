@@ -18,7 +18,9 @@
  * saved → no Va. The card lists the weights it used so an old passenger weight is visible.
  *
  * State: this._state holds the fields AS TYPED (strings): { altimeter, alt, oatF, kias }.
- * Manual edits are saved to Settings 'vne_inputs' (flypi_vne_inputs). Values pushed through
+ * Manual edits are saved to Settings 'vne_inputs' (flypi_vne_inputs) with savedAt (ms), so the
+ * pill can show how old the entries are (Dana 2026-11-13, option 1: an always-on pill fed by
+ * entries from an earlier flight read Vne 164 where 154 was right). Values pushed through
  * setInputs() (the live-data hook) are shown with their source and NOT saved; the next manual
  * edit switches back to "Manual entry" and saves everything.
  *
@@ -40,6 +42,7 @@ class VnePanel extends EventTarget {
         this._el = null;
         this._source = 'manual';
         this._state = VnePanel._loadState();
+        this._stateAt = VnePanel._loadSavedAt();   // ms of the entries shown, null = unknown (saved before v13.18)
         this._last = null;
         this._buildDOM();
         this._onExternal = () => this.refresh();
@@ -85,6 +88,8 @@ class VnePanel extends EventTarget {
             vneKias: r.ok ? r.vneKias : null,
             vaKias: r.vaKias ?? null,
             altFt: r.ok ? alt : null,
+            oatF: r.ok ? AirspeedLimits.parseNumber(this._state.oatF) : null,
+            inputsAt: this._stateAt,     // ms the entries were made, null = unknown
             overGross: !!r.overGross,
         };
     }
@@ -118,6 +123,7 @@ class VnePanel extends EventTarget {
         else if (fin(values.oatC)) this._state.oatF = VnePanel._fmtEntry(AirspeedLimits.cToF(values.oatC), 'oatF');
         if (fin(values.kias)) this._state.kias = VnePanel._fmtEntry(values.kias, 'kias');
         this._source = String(source || 'live');
+        this._stateAt = Date.now();
         this._syncInputs();
         this._render();
     }
@@ -183,9 +189,20 @@ class VnePanel extends EventTarget {
         return s;
     }
 
+    /** When the saved entries were made (ms), or null: none saved, saved before savedAt existed, or bad. */
+    static _loadSavedAt() {
+        let saved = null;
+        try {
+            saved = (typeof Settings !== 'undefined') ? Settings.vneInputs : null;
+        } catch (_) { saved = null; }
+        const t = saved && typeof saved === 'object' ? saved.savedAt : null;
+        // A time in the future (clock changed) is not trusted: the age would read "just now".
+        return (typeof t === 'number' && Number.isFinite(t) && t > 0 && t <= Date.now() + 60000) ? t : null;
+    }
+
     _save() {
         try {
-            if (typeof Settings !== 'undefined') Settings.vneInputs = { ...this._state };
+            if (typeof Settings !== 'undefined') Settings.vneInputs = { ...this._state, savedAt: this._stateAt };
         } catch (_) { /* storage full / blocked: the card still works this session */ }
     }
 
@@ -292,6 +309,7 @@ class VnePanel extends EventTarget {
 
     _edited() {
         this._source = 'manual';
+        this._stateAt = Date.now();
         this._syncInputs();
         this._save();
         this._render();

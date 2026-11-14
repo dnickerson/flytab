@@ -334,9 +334,9 @@ describe('summary and change events (for the pill)', () => {
         panel.addEventListener('change', () => { n++; });
         enter8000();
         expect(n).toBe(3);
-        expect(panel.summary()).toEqual({ ok: true, vneKias: 161, vaKias: 94, altFt: 8000, overGross: false });
+        expect(panel.summary()).toEqual({ ok: true, vneKias: 161, vaKias: 94, altFt: 8000, oatF: expect.any(Number), inputsAt: expect.any(Number), overGross: false });
         type('alt', '');
-        expect(panel.summary()).toEqual({ ok: false, vneKias: null, vaKias: 94, altFt: null, overGross: false });
+        expect(panel.summary()).toEqual({ ok: false, vneKias: null, vaKias: 94, altFt: null, oatF: null, inputsAt: expect.any(Number), overGross: false });
     });
 
     it('destroy stops listening and removes the card', () => {

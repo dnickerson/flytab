@@ -13426,7 +13426,10 @@ body:has(.checklist-page.visible) > .toast { z-index: 900; }
     z-index: 400;
     display: flex;
     align-items: baseline;
-    gap: 8px;
+    flex-wrap: wrap;           /* the "@ 8,000 · 40°F · 3h ago" line goes under Vne / Va */
+    column-gap: 8px;
+    row-gap: 0;
+    max-width: 260px;
     margin: 0;
     padding: 4px 10px;
     background: var(--bg-primary);
@@ -13461,6 +13464,7 @@ body:has(.checklist-page.visible) > .toast { z-index: 900; }
     color: var(--text-primary);
     padding: 0 4px 0 0;
 }
+.vne-pill-alt { flex-basis: 100%; text-align: left; }
 .vne-pill-alt[hidden] { display: none; }
 
 .vne-card {

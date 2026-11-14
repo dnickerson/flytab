@@ -2,7 +2,7 @@
  * Vne / Va map pill (web/cockpit/vne-pill.js): what it shows, tap opens/closes the card,
  * placement under the engine box. jsdom has no layout, so offsetTop/offsetHeight are set by hand.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 
 const read = (p) => readFileSync(p, 'utf8');
@@ -60,9 +60,73 @@ describe('what the pill shows', () => {
         build();
         expect(pillText()).toBe('Vne — Va 94');
         type('altimeter', '29.92'); type('alt', '8000'); type('oatF', '32');
-        expect(pillText()).toBe('Vne 161 Va 94 @ 8,000');
+        expect(pillText()).toBe('Vne 161 Va 94 @ 8,000 · 32°F · just now');
         type('altimeter', '3012');
         expect(pillText()).toBe('Vne — Va 94');
+    });
+
+    describe('OAT and the age of the entries (Dana 2026-11-13, option 1)', () => {
+        const T0 = Date.UTC(2026, 10, 13, 15, 0, 0);
+        beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(T0); });
+        afterEach(() => { vi.useRealTimers(); });
+
+        it('entries from an earlier flight show their OAT and how old they are (the review\'s 164-vs-154 case)', () => {
+            // saved 3 h ago on a cold, high-pressure day; the pill must say so
+            Settings.vneInputs = { altimeter: '30.40', alt: '8000', oatF: '20', kias: '', savedAt: T0 - 3 * 3600000 };
+            build();
+            expect(pillText()).toMatch(/^Vne \d+ Va — @ 8,000 · 20°F · 3h ago$/);
+        });
+
+        it('the age counts on with the card\'s refresh; a new entry resets it', () => {
+            build();
+            type('altimeter', '29.92'); type('alt', '8000'); type('oatF', '59');
+            expect(pillText()).toContain('· 59°F · just now');
+            vi.advanceTimersByTime(14 * 60000);                 // the 15 s refresh fires change
+            expect(pillText()).toContain('· 14m ago');
+            vi.advanceTimersByTime(2 * 3600000);
+            expect(pillText()).toContain('· 2h ago');
+            type('oatF', '60');
+            expect(pillText()).toContain('· 60°F · just now');
+        });
+
+        it('the save carries savedAt and a new panel reads it back', () => {
+            build();
+            type('altimeter', '29.92'); type('alt', '8000'); type('oatF', '59');
+            expect(Settings.vneInputs.savedAt).toBe(T0);
+            pill.destroy(); panel.destroy();
+            vi.setSystemTime(T0 + 50 * 3600000);
+            build();
+            expect(pillText()).toContain('· 59°F · 2d ago');
+        });
+
+        it('entries saved before the age existed (no savedAt) read "age ?"; a time in the future too', () => {
+            Settings.vneInputs = { altimeter: '29.92', alt: '8000', oatF: '59', kias: '' };
+            build();
+            expect(pillText()).toContain('· 59°F · age ?');
+            pill.destroy(); panel.destroy();
+            Settings.vneInputs = { altimeter: '29.92', alt: '8000', oatF: '59', kias: '', savedAt: T0 + 3600000 };
+            build();
+            expect(pillText()).toContain('· age ?');
+        });
+
+        it('live-data entries (setInputs) are dated when pushed', () => {
+            build();
+            vi.setSystemTime(T0 + 7 * 60000);
+            panel.setInputs({ pressureAltFt: 8000, oatF: 59 }, 'test feed');
+            expect(pillText()).toContain('· 59°F · just now');
+        });
+
+        it('ageText boundaries', () => {
+            const at = T0;
+            expect(VnePill.ageText(at, at + 59 * 1000)).toBe('just now');
+            expect(VnePill.ageText(at, at + 60 * 1000)).toBe('1m ago');
+            expect(VnePill.ageText(at, at + 59 * 60000)).toBe('59m ago');
+            expect(VnePill.ageText(at, at + 60 * 60000)).toBe('1h ago');
+            expect(VnePill.ageText(at, at + 47.9 * 3600000)).toBe('47h ago');
+            expect(VnePill.ageText(at, at + 48 * 3600000)).toBe('2d ago');
+            expect(VnePill.ageText(null)).toBe('age ?');
+            expect(VnePill.ageText(at, at - 5000)).toBe('just now');
+        });
     });
 
     it('never turns red, even with KIAS over Vne', () => {
