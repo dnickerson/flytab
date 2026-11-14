@@ -653,15 +653,17 @@ class EnginePage {
             // or the 45-min gap.
             const flowLost = fuelStale && typeof FuelTankState !== 'undefined' &&
                 typeof FuelTankState.isFlowLost === 'function' && FuelTankState.isFlowLost();
-            const txt = flowLost ? EnginePage.FUEL_FLOW_LOST_TEXT : EnginePage.FUEL_STALE_TEXT;
+            // Stuck sender (FF 0 with the engine running > 90 s) has its own wording:
+            // engine data is still arriving.
+            const zeroFlow = flowLost && typeof FuelTankState.flowLostReason === 'function' &&
+                FuelTankState.flowLostReason() === 'zero_flow';
+            const txt = zeroFlow ? EnginePage.FUEL_ZERO_FLOW_TEXT
+                : flowLost ? EnginePage.FUEL_FLOW_LOST_TEXT : EnginePage.FUEL_STALE_TEXT;
             if (this._dom.fuelStale.textContent !== txt) this._dom.fuelStale.textContent = txt;
         }
 
         if (fuelFlow > 0 && fuelTracked) {
-            const endH = gallonsRem / fuelFlow;
-            const h = Math.floor(endH);
-            const m = Math.round((endH - h) * 60);
-            this._setText('ep-fuel-end', `${h}:${String(m).padStart(2, '0')}`);
+            this._setText('ep-fuel-end', FuelEngine.formatHm(gallonsRem / fuelFlow, 'hr', 'colon'));
         } else {
             this._setText('ep-fuel-end', '-:--');
         }
@@ -1692,3 +1694,5 @@ EnginePage.FUEL_STALE_TEXT =
     'UNCONFIRMED \u2014 TANK STATE NOT UPDATED IN 45+ MIN. REMAINING MAY READ HIGH; CONFIRM FUEL.';
 EnginePage.FUEL_FLOW_LOST_TEXT =
     'UNCONFIRMED \u2014 ENGINE DATA LOST WITH THE ENGINE RUNNING; BURN NOT COUNTED. REMAINING MAY READ HIGH; CONFIRM FUEL.';
+EnginePage.FUEL_ZERO_FLOW_TEXT =
+    'UNCONFIRMED \u2014 FUEL FLOW READS 0 WITH THE ENGINE RUNNING (SENDER?). BURN NOT COUNTED; REMAINING MAY READ HIGH. CONFIRM FUEL.';

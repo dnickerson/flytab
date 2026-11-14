@@ -28,6 +28,13 @@ class Settings {
         fuel_manual_override: false,
         gps_source: 'auto',  // 'auto' (Stratux primary, device GPS fallback) | 'stratux' | 'internal'
         flytab_api_key: 'flytab2025',
+        // Vne / Va card (cockpit/vne-panel.js): last entries AS TYPED,
+        // { altimeter, alt, oatF, kias }. null until the first entry.
+        vne_inputs: null,
+        // W&B non-fuel station weights AS TYPED, keyed by station name
+        // ({ Pilot: '190', Passenger: '', Baggage: '20' }). Kept until changed (Dana 2026-11-13);
+        // the Vne/Va card reads them for Va. Fuel is never saved here.
+        wb_station_weights: null,
     };
 
     // 'flypi' is a legacy prefix from the deprecated FlyPi/iPad predecessor
@@ -132,4 +139,10 @@ class Settings {
 
     static get fuelManualOverride() { return Settings.get('fuel_manual_override'); }
     static set fuelManualOverride(v) { Settings.set('fuel_manual_override', v); }
+
+    static get vneInputs() { return Settings.get('vne_inputs'); }
+    static set vneInputs(v) { Settings.set('vne_inputs', v); }
+
+    static get wbStationWeights() { return Settings.get('wb_station_weights'); }
+    static set wbStationWeights(v) { Settings.set('wb_station_weights', v); }
 }

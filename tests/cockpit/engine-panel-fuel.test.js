@@ -8,6 +8,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { readFileSync as readFileSyncFE } from 'fs';
+// FuelEngine.formatHm is the shared h:mm helper (loaded before every cockpit module in index.html).
+globalThis.FuelEngine = globalThis.FuelEngine || new Function(readFileSyncFE('web/shared/fuel-engine.js', 'utf8') + '\nreturn FuelEngine;')();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(__dirname, '../../', p), 'utf8');

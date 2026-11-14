@@ -418,9 +418,7 @@ class InstrumentStrip {
     }
 
     static _formatEte(minutes) {
-        const h = Math.floor(minutes / 60);
-        const m = Math.round(minutes % 60);
-        return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}m`;
+        return FuelEngine.formatHm(minutes, 'min', 'colonOrM');
     }
 
     _set(field, value) {

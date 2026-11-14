@@ -199,4 +199,20 @@ class WbCalculator {
             envelopeReason: inEnvelope.reason || null,
         };
     }
+
+    /**
+     * A saved station weight (Settings.wbStationWeights[name]) as the text to put back in its
+     * field: a plain non-negative number of at most 4 digits (2 decimals), else ''. Anything
+     * else in storage (a corrupt or hand-edited value) is dropped, not guessed at.
+     * @param {*} saved - the stored object (or anything)
+     * @param {string} name - station name
+     * @returns {string}
+     */
+    static savedWeightText(saved, name) {
+        if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return '';
+        const v = saved[name];
+        const t = typeof v === 'number' ? (Number.isFinite(v) ? String(v) : '')
+            : (typeof v === 'string' ? v.trim() : '');
+        return /^\d{1,4}(\.\d{1,2})?$/.test(t) ? t : '';
+    }
 }

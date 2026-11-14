@@ -117,15 +117,77 @@ describe('FuelTankState', () => {
             const FuelTankState = freshFuelTankState();
             global.CockpitConfig = { aircraft: () => 36 };
             FuelTankState.init(18, 18, 'L');
-            const state1 = FuelTankState.getState();
-            const t0 = new Date(state1.last_sample_at).getTime();
+            const t0 = new Date(FuelTankState.getState().last_sample_at).getTime();
+            // A burning sample first (F1: right after init() there is no previous
+            // burning sample, so the first sample books no gap).
+            FuelTankState.onSample(10, t0 + 1000);
+            const left1 = FuelTankState.getState().left_gal;
             // Simulate a 60s gap (way over the 10s cap) at 10 GPH
-            FuelTankState.onSample(10, t0 + 60000);
+            FuelTankState.onSample(10, t0 + 61000);
             const state2 = FuelTankState.getState();
             // Only 10s of burn should be applied: 10 gph * (10/3600) = 0.02778 gal
-            expect(state2.left_gal).toBeCloseTo(18 - 10 * (10 / 3600), 4);
+            expect(state2.left_gal).toBeCloseTo(left1 - 10 * (10 / 3600), 4);
             // The other 50s should be tracked as dropped: 10 gph * (50/3600) = 0.1389 gal
             expect(state2.dropped_burn_estimate_gal).toBeCloseTo(10 * (50 / 3600), 4);
+            expect(state2.gap_burn_since_init_gal).toBeCloseTo(10 * (50 / 3600), 4);
+        });
+
+        it('F1: the first sample after init() books no gap, however long since the init', () => {
+            const FuelTankState = freshFuelTankState();
+            global.CockpitConfig = { aircraft: () => 36 };
+            FuelTankState.init(18, 18, 'L');
+            const t0 = new Date(FuelTankState.getState().last_sample_at).getTime();
+            FuelTankState.onSample(10, t0 + 20 * 60000);
+            const st = FuelTankState.getState();
+            expect(st.dropped_burn_estimate_gal).toBe(0);
+            expect(st.gap_burn_since_init_gal).toBe(0);
+            expect(st.left_gal).toBeCloseTo(18 - 10 * (10 / 3600), 6);
+        });
+
+        it('F1: after a stopped frame the next gap is engine-off time, not dropped burn', () => {
+            const FuelTankState = freshFuelTankState();
+            global.CockpitConfig = { aircraft: () => 36 };
+            FuelTankState.init(18, 18, 'L');
+            const t0 = new Date(FuelTankState.getState().last_sample_at).getTime();
+            FuelTankState.onFrame(t0 + 1000, 10, 2400);
+            FuelTankState.onFrame(t0 + 2000, 0, 0);            // stopped
+            FuelTankState.onSample(0.7, t0 + 3000, 0);         // residual flow: still off
+            expect(FuelTankState.getState().engine.state).toBe('off');
+            FuelTankState.onFrame(t0 + 40 * 60000, 6, 1000);
+            expect(FuelTankState.getState().dropped_burn_estimate_gal).toBe(0);
+            expect(FuelTankState.getState().engine.state).toBe('running');
+            // and the next real gap is booked again
+            FuelTankState.onFrame(t0 + 40 * 60000 + 70000, 6, 2400);
+            expect(FuelTankState.getState().dropped_burn_estimate_gal).toBeCloseTo(6 * 60 / 3600, 6);
+        });
+
+        it('F1: init() still sets last_sample_at (staleness rule) but leaves no burning sample', () => {
+            const FuelTankState = freshFuelTankState();
+            delete global.CockpitConfig;
+            FuelTankState.init(18, 18, 'L');
+            const st = FuelTankState.getState();
+            expect(st.last_sample_at).toBe(st.initialized_at);
+            expect(st.last_burn_at).toBeNull();
+            expect(st.engine.state).toBe('unknown');
+            expect(st.engine.covered_at).toBe(st.initialized_at);
+            expect(st.engine.pending_gap_ms).toBe(0);
+            expect(st.gap_burn_since_init_gal).toBe(0);
+        });
+
+        it('F2: gap_burn_since_init_gal stays absent in state stored before it existed', () => {
+            localStorage.clear();
+            const FuelTankState = new Function(`${src}\nreturn FuelTankState;`)();
+            delete global.CockpitConfig;
+            const t = Date.now();
+            localStorage.setItem('flytab_tank_state', JSON.stringify({
+                left_gal: 10, right_gal: 10, active_tank: 'L', tank_switched_at: new Date(t).toISOString(),
+                last_sample_at: new Date(t).toISOString(), last_burn_at: new Date(t).toISOString(),
+                requires_confirm: false, initialized_at: new Date(t).toISOString(),
+                imbalance: false, dropped_burn_estimate_gal: 0, dropped_burn_ambiguous: false,
+            }));
+            FuelTankState.onSample(9, t + 60000);
+            expect(FuelTankState.getState().dropped_burn_estimate_gal).toBeGreaterThan(0);
+            expect(FuelTankState.getState().gap_burn_since_init_gal ?? null).toBeNull();
         });
 
         it('does not accumulate dropped burn for normal (<=10s) gaps', () => {

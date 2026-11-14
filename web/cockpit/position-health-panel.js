@@ -155,7 +155,7 @@ class PositionHealthPanel {
     static duration(s) {
         if (s < 90) return `${s} s`;
         if (s < 5400) return `${Math.round(s / 60)} min`;
-        return `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`;
+        return FuelEngine.formatHm(s, 's', 'hMin');
     }
 
     destroy() {

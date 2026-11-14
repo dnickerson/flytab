@@ -215,28 +215,32 @@ describe('I1: garbage legs are excluded and counted', () => {
     });
 
     it('an applied dropped-burn correction is not counted as flow burn', () => {
+        // F2: a gap above max(0.2 gal, 2 % of actual) now excludes the leg ("comms
+        // gap"), so this uses a 60 s gap (≈0.14 gal), below that threshold.
         FuelTankState.init(18, 18, 'L');
         applyTic(11, 11);            // 36.0
         fly(10.0);                   // 26.0
-        at(NOW + 180000);            // 3-min comms gap
-        FuelTankState.onSample(10, NOW);   // 10 s burned + ~0.47 gal dropped estimate
-        expect(FuelTankState.applyDroppedBurn(0.47)).toBe(true);   // tracked 25.5
+        at(NOW + 60000);             // 1-min comms gap
+        FuelTankState.onSample(10, NOW);   // 10 s burned + ~0.14 gal dropped estimate
+        expect(FuelTankState.applyDroppedBurn(0.13)).toBe(true);   // tracked 25.8
         applyTic(6, 6);              // 26.0: actual 10.0
 
-        expect(history()[1].tracked_gal).toBe(25.5);
-        expect(history()[1].dropped_applied_since_init_gal).toBeCloseTo(0.47, 6);
+        expect(history()[1].tracked_gal).toBe(25.8);
+        expect(history()[1].dropped_applied_since_init_gal).toBeCloseTo(0.13, 6);
+        expect(history()[1].gap_burn_since_init_gal).toBeCloseTo(10 * 50 / 3600, 6);
         const p = panel();
-        expect(p.used).toBe('10.0 gal');   // 36.0 − 25.5 − 0.47, not 10.5
+        expect(p.used).toBe('10.0 gal');   // flow burn, not 10.2 with the correction
         expect(p.filled).toBe('10.0 gal');
+        expect(p.excludedShown).toBe(false);
     });
 
-    it('an outstanding (unapplied) dropped-burn estimate does not exclude the leg', () => {
+    it('an outstanding (unapplied) dropped-burn estimate below the comms-gap threshold does not exclude the leg', () => {
         FuelTankState.init(18, 18, 'L');
         applyTic(11, 11);
         fly(10.0);
-        at(NOW + 180000);
+        at(NOW + 60000);
         FuelTankState.onSample(10, NOW);
-        expect(FuelTankState.getState().dropped_burn_estimate_gal).toBeGreaterThan(0.4);
+        expect(FuelTankState.getState().dropped_burn_estimate_gal).toBeGreaterThan(0.1);
         applyTic(6, 6);              // tracked 26.0, actual 10.0
 
         const p = panel();
@@ -245,6 +249,17 @@ describe('I1: garbage legs are excluded and counted', () => {
         expect(p.used).toBe('10.0 gal');
         expect(p.ratio).toBe('1.003');
         expect(p.excludedShown).toBe(false);
+    });
+
+    it('F2: the same leg with a 3-min gap (≈0.47 gal, above 0.2 gal) is excluded as a comms gap, applied or not', () => {
+        FuelTankState.init(18, 18, 'L');
+        applyTic(11, 11);
+        fly(10.0);
+        at(NOW + 180000);
+        FuelTankState.onSample(10, NOW);
+        expect(FuelTankState.applyDroppedBurn(0.47)).toBe(true);
+        applyTic(6, 6);
+        expect(panel().excluded).toBe('1 leg excluded: 1 comms gap');
     });
 
     it('legacy entries (no tracked_since key) are excluded and counted', () => {
@@ -437,5 +452,68 @@ describe('finding 3: a hand-edited TRACKED figure reaches the K-factor', () => {
         editNewest('25.5');                                  // corrected
         expect(history()[1].flow_burn_since_init_gal).toBeUndefined();
         expect($('fo-kf-used').textContent).toBe('10.5 gal');   // 36.0 − 25.5
+    });
+});
+
+describe('F2: legs with comms-gap burn', () => {
+    // prev → next: actual 15.0 gal, flow burn 15.0 gal.
+    const leg = (gap) => {
+        const next = { measured_at: '2026-11-01T13:00:00Z', total_gal: 20.0, tracked_gal: 20.0,
+            tracked_since: 'i1', tank_init_at: 'i2', tracked_stale: false,
+            dropped_applied_since_init_gal: 0, flow_burn_since_init_gal: 15.0 };
+        if (gap !== undefined) next.gap_burn_since_init_gal = gap;
+        localStorage.setItem('flypi_fuel_history', JSON.stringify([
+            { measured_at: '2026-11-01T12:00:00Z', total_gal: 35.0, tracked_gal: 30.0, tracked_since: 'i0',
+              tank_init_at: 'i1', tracked_stale: false, dropped_applied_since_init_gal: 0 },
+            next,
+        ]));
+    };
+
+    it('a 1.0 gal gap on a 15 gal leg is excluded as "comms gap"', () => {
+        leg(1.0);
+        const p = panel();
+        expect(p.filled).toBe('-- gal');
+        expect(p.excluded).toBe('1 leg excluded: 1 comms gap');
+    });
+
+    it('a 0.1 gal gap is counted', () => {
+        leg(0.1);
+        const p = panel();
+        expect(p.filled).toBe('15.0 gal');
+        expect(p.excludedShown).toBe(false);
+    });
+
+    it('threshold is max(0.2 gal, 2% of actual): 0.3 gal on 15 gal (2% = 0.3) counts, 0.31 is excluded', () => {
+        leg(0.3);
+        expect(panel().filled).toBe('15.0 gal');
+        overlay._el.remove(); overlay = new FuelOverlay(document.body);
+        leg(0.31);
+        expect(panel().excluded).toBe('1 leg excluded: 1 comms gap');
+    });
+
+    it('a record without the field (saved before it existed) is unchanged: counted', () => {
+        leg(undefined);
+        const p = panel();
+        expect(p.filled).toBe('15.0 gal');
+        expect(p.excludedShown).toBe(false);
+    });
+
+    it('the measurement record carries gap_burn_since_init_gal from FuelTankState (end to end)', () => {
+        FuelTankState.init(18, 18, 'L');
+        applyTic(11, 11);
+        fly(5.0);
+        at(NOW + 5 * 60000);                 // 5 min comms gap at 10 gph ≈ 0.81 gal
+        FuelTankState.onSample(10, NOW);
+        fly(9.0);
+        applyTic(6, 6);
+        const h = history();
+        expect(h[0].gap_burn_since_init_gal).toBe(0);
+        expect(h[1].gap_burn_since_init_gal).toBeCloseTo(10 * (300 - 10) / 3600, 3);
+        expect(panel().excluded).toBe('1 leg excluded: 1 comms gap');
+    });
+
+    it('nothing tracked: the record says null', () => {
+        applyTic(6, 6);
+        expect(history()[0].gap_burn_since_init_gal).toBeNull();
     });
 });

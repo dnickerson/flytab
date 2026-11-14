@@ -5,13 +5,21 @@
  */
 
 class EngineMLBridge {
-    /** FuelState.measuredGallons() gallons, or 0 when null or stale. */
+    /** EngineML's fuel_remaining for "fuel on board unknown". EngineAdvisor.java reads
+     *  any value < 0 as unknown and skips the route advisory; 0 is a real (empty)
+     *  figure, so unknown must never be sent as 0. */
+    static FUEL_UNKNOWN = -1;
+
+    /** FuelState.measuredGallons() gallons (a real 0.0 included), or FUEL_UNKNOWN (-1)
+     *  when nothing is measured (null: nothing tracked / capacity default only), the
+     *  tracked figure is stale (UNCONFIRMED, reads high) or not finite. */
     static _measuredFuelGal() {
         try {
             const m = (typeof FuelState !== 'undefined' && typeof FuelState.measuredGallons === 'function')
                 ? FuelState.measuredGallons() : null;
-            return (m && !m.stale) ? m.gallons : 0;
-        } catch (_) { return 0; }
+            return (m && !m.stale && Number.isFinite(m.gallons) && m.gallons >= 0)
+                ? m.gallons : EngineMLBridge.FUEL_UNKNOWN;
+        } catch (_) { return EngineMLBridge.FUEL_UNKNOWN; }
     }
 
     /** Samples further apart than this are not compared (frames come at 1 Hz, or every 2 s on HTTP fallback). */
@@ -250,7 +258,8 @@ class EngineMLBridge {
                     altitude:       num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft, 3000),
                     mp:             fakeFrame.manifold_pressure,
                     carb_temp:      num(d.carb_temp ?? d.Carb_Temp, 40),
-                    fuel_remaining: num(EngineMLBridge._measuredFuelGal(), 20),
+                    // F4 contract: -1 unknown, a real 0 as 0 (no simulated quantity).
+                    fuel_remaining: EngineMLBridge._measuredFuelGal(),
                     ground_speed:   num(sit?.ground_speed, 100),
                     distance_nm:    0,
                     phase:          (this._lastComputedPhase && this._lastComputedPhase !== 'shutdown') ? this._lastComputedPhase : (this._flightPhase ?? 'cruise'),
@@ -396,9 +405,10 @@ class EngineMLBridge {
                 altitude: num(sit?.alt_msl ?? d.gps_altitude ?? d.altitude_ft ?? 0),
                 mp: num(d.MP ?? d.manifold_pressure ?? d.mp ?? d.MAP ?? 0),
                 carb_temp: num(d.carb_temp ?? d.Carb_Temp ?? 0),
-                // Tablet fuel (FuelState.measuredGallons): 0 when only the capacity
-                // default is known or the tracked figure is stale (UNCONFIRMED, reads
-                // high). The Pi tracker figure is never used.
+                // Tablet fuel (FuelState.measuredGallons): -1 (unknown) when nothing is
+                // measured (capacity default only) or the tracked figure is stale
+                // (UNCONFIRMED, reads high); a real 0.0 is sent as 0. The Pi tracker
+                // figure is never used.
                 fuel_remaining: num(EngineMLBridge._measuredFuelGal()),
                 ground_speed: num(sit?.ground_speed ?? d.ground_speed ?? d.speed_kts ?? 0),
                 distance_nm: 0, // TODO: compute from route
