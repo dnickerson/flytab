@@ -14,6 +14,10 @@ class Logbook {
     static IDB_NAME = 'flypi-flights';
     static IDB_VERSION = 5;
     static IDB_ML_STORE = 'flypi_ml_logs';
+    // Server pull: rows per request (the server returns at most 1,000 whatever is asked) and a
+    // bound on requests per pull (50 x 1,000 rows) so a misbehaving server cannot loop it.
+    static PULL_PAGE_SIZE = 1000;
+    static PULL_MAX_PAGES = 50;
 
     /**
      * @param {NasrDB} nasrDb - NasrDB instance for airport lookups
@@ -1060,69 +1064,103 @@ class Logbook {
 
     // ========== Server Fetch ==========
 
-    async _fetchFromServer() {
+    /**
+     * Pull server changes since the stored cursor, a page at a time. The server returns at most
+     * 1,000 rows per request whatever `limit` asks (PostgREST caps it), oldest seq first: one
+     * request stopped at 2026-01-30 of 1,212 rows (11-07), and the full-pull reconciliation below
+     * then deleted every newer local entry. Pages are fetched by `since` = the last page's max_seq
+     * until a page comes back empty; the cursor is saved after each page. Local entries are only
+     * removed on a full pull (cursor 0) that reached that empty page.
+     */
+    _fetchFromServer() {
+        // One pull at a time: the open-time pull and syncWhenOnline (SYNC, auto-sync) both call
+        // this, and a pull is now several requests. A second call joins the pull in flight.
+        if (this._pullInFlight) return this._pullInFlight;
+        this._pullInFlight = this._pullFromServer().finally(() => { this._pullInFlight = null; });
+        return this._pullInFlight;
+    }
+
+    async _pullFromServer() {
         if (!navigator.onLine) return;
         const workerBase = Settings.workerBase;
-        const since = Number(localStorage.getItem('flypi_logbook_seq') || 0);
-        const isFullPull = since === 0;
-        const url = `${workerBase}/flights/logbook?since=${since}&limit=1000`;
+        const startSince = Number(localStorage.getItem('flypi_logbook_seq') || 0);
+        const isFullPull = startSince === 0;
+        let since = startSince;
         try {
-            const resp = await fetch(url, {
-                headers: Settings.apiHeaders,
-                signal: AbortSignal.timeout(8000),
-            });
-            if (!resp.ok) return;
-            const { entries, max_seq } = await resp.json();
-            if (!Array.isArray(entries)) return;
-
             // Load all local entries once for the reconciliation pass
             const localAll = await this.getEntries({ includeTombstones: true });
             const localById = new Map(localAll.map(e => [e.id, e]));
 
-            let merged = 0, updated = 0, removed = 0;
+            let merged = 0, updated = 0, removed = 0, pages = 0;
             const serverIdsSeen = new Set();
+            let complete = false;       // true only when a page came back empty: everything was seen
 
-            for (const serverEntry of entries) {
-                serverIdsSeen.add(serverEntry.id);
+            for (; pages < Logbook.PULL_MAX_PAGES; pages++) {
+                const resp = await fetch(`${workerBase}/flights/logbook?since=${since}&limit=${Logbook.PULL_PAGE_SIZE}`, {
+                    headers: Settings.apiHeaders,
+                    signal: AbortSignal.timeout(8000),
+                });
+                if (!resp.ok) break;
+                const { entries, max_seq } = await resp.json();
+                if (!Array.isArray(entries)) break;
+                if (entries.length === 0) { complete = true; break; }
 
-                if (serverEntry.deleted_at) {
-                    // Tombstone — remove from local IDB
-                    if (localById.has(serverEntry.id)) {
-                        await this._deleteEntry(serverEntry.id);
-                        removed++;
+                for (const serverEntry of entries) {
+                    serverIdsSeen.add(serverEntry.id);
+
+                    if (serverEntry.deleted_at) {
+                        // Tombstone — remove from local IDB
+                        if (localById.has(serverEntry.id)) {
+                            await this._deleteEntry(serverEntry.id);
+                            localById.delete(serverEntry.id);
+                            removed++;
+                        }
+                        continue;
                     }
-                    continue;
+
+                    // Augment field aliases for FlyTab compatibility
+                    serverEntry.departure_icao = serverEntry.departure_icao || serverEntry.from_airport;
+                    serverEntry.destination_icao = serverEntry.destination_icao || serverEntry.to_airport;
+                    serverEntry.aircraft_tail = serverEntry.aircraft_tail || serverEntry.aircraft_id;
+                    serverEntry.flight_time_hours = serverEntry.flight_time_hours || serverEntry.total_time;
+                    serverEntry.synced = true;
+                    serverEntry.created_at = serverEntry.created_at || new Date().toISOString();
+
+                    const local = localById.get(serverEntry.id);
+                    if (local && !local.synced) {
+                        // Local has pending edits — push will handle conflict
+                        continue;
+                    }
+                    // localById follows every save/delete: a row saved on one page and tombstoned on a
+                    // later page of the same pull (deleted on another device meanwhile) must be found.
+                    if (local) {
+                        const saved = { ...local, ...serverEntry };
+                        await this._saveEntry(saved);
+                        localById.set(saved.id, saved);
+                        updated++;
+                    } else {
+                        await this._saveEntry(serverEntry);
+                        localById.set(serverEntry.id, serverEntry);
+                        merged++;
+                    }
                 }
 
-                // Augment field aliases for FlyTab compatibility
-                serverEntry.departure_icao = serverEntry.departure_icao || serverEntry.from_airport;
-                serverEntry.destination_icao = serverEntry.destination_icao || serverEntry.to_airport;
-                serverEntry.aircraft_tail = serverEntry.aircraft_tail || serverEntry.aircraft_id;
-                serverEntry.flight_time_hours = serverEntry.flight_time_hours || serverEntry.total_time;
-                serverEntry.synced = true;
-                serverEntry.created_at = serverEntry.created_at || new Date().toISOString();
-
-                const local = localById.get(serverEntry.id);
-                if (local && !local.synced) {
-                    // Local has pending edits — push will handle conflict
-                    continue;
-                }
-                if (local) {
-                    await this._saveEntry({ ...local, ...serverEntry });
-                    updated++;
-                } else {
-                    await this._saveEntry(serverEntry);
-                    merged++;
-                }
+                // Next page from this page's max_seq; a page that does not move the cursor forward
+                // (a server bug) ends the pull as incomplete instead of looping.
+                const next = Number(max_seq);
+                if (!(next > since)) break;
+                since = next;
+                localStorage.setItem('flypi_logbook_seq', String(since));
             }
 
             // Full-pull reconciliation: remove synced local entries the server no longer has.
             // This catches hard-deleted rows (no tombstone) that would otherwise stay in IDB forever.
-            // Only safe on a full pull (since=0) — incremental pulls only see recent changes.
-            // Guard: if the server returned zero entries on a full pull, trust nothing and skip
-            // the reconciliation entirely — an empty response most likely indicates an auth error,
-            // server bug, or network truncation, not that the pilot has no flights.
-            if (isFullPull && entries.length > 0) {
+            // Only safe on a full pull (cursor 0) that saw EVERY page — incremental pulls only see
+            // recent changes, and a pull cut short (failed page, page limit, no progress) has not
+            // seen the rest. Guard: if the server returned zero entries on a full pull, trust nothing
+            // and skip the reconciliation entirely — an empty response most likely indicates an auth
+            // error, server bug, or network truncation, not that the pilot has no flights.
+            if (isFullPull && complete && serverIdsSeen.size > 0) {
                 for (const local of localAll) {
                     if (local.synced && !local.deleted_at && !serverIdsSeen.has(local.id)) {
                         await this._deleteEntry(local.id);
@@ -1131,12 +1169,7 @@ class Logbook {
                 }
             }
 
-            // Advance cursor
-            if (max_seq && max_seq > since) {
-                localStorage.setItem('flypi_logbook_seq', String(max_seq));
-            }
-
-            console.log(`[Logbook] Pull (since=${since}): +${merged} new, ${updated} updated, ${removed} removed`);
+            console.log(`[Logbook] Pull (since=${startSince}, ${pages + (complete ? 1 : 0)} page(s)${complete ? '' : ', incomplete'}): +${merged} new, ${updated} updated, ${removed} removed`);
         } catch (err) {
             console.warn('[Logbook] Server fetch failed:', err.message);
         }
