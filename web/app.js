@@ -3,7 +3,7 @@
  * Android Capacitor cockpit app. All data local. Pi for live telemetry only.
  */
 
-const FLYTAB_VERSION = 'v13.11';
+const FLYTAB_VERSION = 'v13.17';
 
 // === Diagnostic Logger (ring buffer in localStorage) ==========
 // Kept in memory and saved at most every FLUSH_MS (errors at once). Every log()
@@ -2408,12 +2408,7 @@ class FlyTabApp {
         const hasPreset = wp.fuel_add_gal != null;
         const presetGal = hasPreset ? (wp._fuelAdded ?? wp.fuel_add_gal) : null;
 
-        const fmtEte = (min) => {
-            if (min == null) return '\u2014';
-            const h = Math.floor(min / 60);
-            const m = Math.round(min % 60);
-            return h > 0 ? `${h}h\u2009${m}m` : `${m}m`;
-        };
+        const fmtEte = (min) => FlyTabApp.fmtEteHm(min);
         const fmtDist = (nm) => (nm != null ? `${nm}` : '\u2014');
 
         const nextDest  = nextFlight?.dest  ?? '\u2014';
@@ -2603,6 +2598,13 @@ class FlyTabApp {
         for (const e of events) DiagLog.log('error', FlyTabApp.describeRendererEvent(e), { priority: e.priority });
         const msg = FlyTabApp.restartMessage(events[events.length - 1] || null, recovery);
         if (msg) this.showToast(msg);
+    }
+
+    /** Minutes → "Hh Mm" (thin space) or "Mm"; '—' for null. The total is rounded
+     *  first, so 119.6 min is "2h 0m" (floor/round on the parts showed "1h 60m"). */
+    static fmtEteHm(min) {
+        if (min == null) return '\u2014';
+        return FuelEngine.formatHm(min, 'min', 'hThinM');
     }
 
     /** One AppHealth renderer event, for the diagnostic log. */

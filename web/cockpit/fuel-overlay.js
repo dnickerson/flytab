@@ -21,6 +21,10 @@ class FuelOverlay {
     /** K-factor: the New K-Factor guidance needs at least this much actual burn over
      *  the counted legs (Ruling 16). */
     static KF_MIN_ACTUAL_GAL = 30;
+    /** K-factor: a leg whose comms-gap burn (gap_burn_since_init_gal) exceeds
+     *  max(KF_GAP_MIN_GAL, KF_GAP_FRAC × the leg's actual burn) is excluded. */
+    static KF_GAP_MIN_GAL = 0.2;
+    static KF_GAP_FRAC = 0.02;
 
     constructor(container) {
         this._container = container;
@@ -526,9 +530,11 @@ class FuelOverlay {
      * stored state predates that field). `flowBurn` is the fuel-flow burn since that
      * init: burned_since_init_gal − droppedApplied. It counts burn charged to a tank
      * already floored at 0, which the tank total cannot show. Null when the stored
-     * state predates burned_since_init_gal.
+     * state predates burned_since_init_gal. `gapBurn` is the comms-gap burn estimated
+     * since that init, applied or not (gap_burn_since_init_gal); null when the stored
+     * state predates that field.
      * @returns {{gal: number, stale: boolean, since: (string|null), droppedApplied: number,
-     *            flowBurn: (number|null)}|null}
+     *            flowBurn: (number|null), gapBurn: (number|null)}|null}
      */
     _trackedTotal() {
         try {
@@ -545,7 +551,9 @@ class FuelOverlay {
             const burned = st.burned_since_init_gal;
             const flowBurn = (typeof burned === 'number' && Number.isFinite(burned))
                 ? Math.max(0, burned - droppedApplied) : null;
-            return { gal, stale, since, droppedApplied, flowBurn };
+            const g = st.gap_burn_since_init_gal;
+            const gapBurn = (typeof g === 'number' && Number.isFinite(g)) ? Math.max(0, g) : null;
+            return { gal, stale, since, droppedApplied, flowBurn, gapBurn };
         } catch (_) { return null; }
     }
 
@@ -679,7 +687,7 @@ class FuelOverlay {
             FuelState.saveMeasurement(m);
             if (typeof FuelTankState !== 'undefined') {
                 const existing = FuelTankState.getState();
-                FuelTankState.init(m.left_gal, m.right_gal, existing?.active_tank ?? 'L');
+                FuelTankState.init(m.left_gal, m.right_gal, existing?.active_tank ?? 'L', 'tic');
                 m.tank_init_at = FuelTankState.getState()?.initialized_at ?? null;
                 // Belt-and-suspenders: re-dispatch so the gauge widget re-renders even
                 // if the synchronous dispatch inside init() was swallowed by the WebView.
@@ -711,7 +719,9 @@ class FuelOverlay {
      *   flow_burn_since_init_gal — fuel-flow burn since tracked_since
      *                    (burned_since_init_gal − dropped_applied_since_init_gal;
      *                    null when the stored state predates burned_since_init_gal)
-     * (null / null / 0 / null when nothing is tracked). The caller adds tank_init_at,
+     *   gap_burn_since_init_gal — comms-gap burn estimated since tracked_since,
+     *                    applied or not (null when the stored state predates it)
+     * (null / null / 0 / null / null when nothing is tracked). The caller adds tank_init_at,
      * the init this measurement creates, after FuelTankState.init().
      * @param {number} [addedGal=0] - gallons pumped (RECORD FUEL STOP), else 0
      */
@@ -725,6 +735,7 @@ class FuelOverlay {
         m.tracked_stale = tracked ? tracked.stale : null;
         m.dropped_applied_since_init_gal = tracked ? tracked.droppedApplied : 0;
         m.flow_burn_since_init_gal = tracked ? tracked.flowBurn : null;
+        m.gap_burn_since_init_gal = tracked ? tracked.gapBurn : null;
         m.tank_init_at = null;
         return m;
     }
@@ -819,7 +830,7 @@ class FuelOverlay {
             const rightGal = FuelEngine.ticToGallons(this._rightTic, this._coefficients);
             const existingTank = (typeof FuelTankState !== 'undefined') ? FuelTankState.getState() : null;
             if (typeof FuelTankState !== 'undefined') {
-                FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L');
+                FuelTankState.init(leftGal, rightGal, existingTank?.active_tank ?? 'L', 'fuel_stop');
                 m.tank_init_at = FuelTankState.getState()?.initialized_at ?? null;
             } else {
                 m.tank_init_at = null;
@@ -1075,6 +1086,11 @@ class FuelOverlay {
      *   unconfirmed — next's tracked figure was stale (next.tracked_stale)
      *   unusable   — actual or tracked used is not positive (e.g. the tic rose with no
      *                fuel stop recorded)
+     *   gap        — next.gap_burn_since_init_gal (comms-gap burn estimated since the
+     *                init, applied or not) > max(KF_GAP_MIN_GAL, KF_GAP_FRAC × actual):
+     *                that burn is in the tic difference but not in the flow burn, so
+     *                the leg reads low. Records without the field (saved before it
+     *                existed) carry no gap information and are not checked.
      *   outlier    — |ratio ÷ centre − 1| > KF_OUTLIER_FRAC over the candidate legs
      *                (legs that passed every rule above). The centre is 1.0, or the
      *                median ratio when it can be trusted (see KF_OUTLIER_FRAC). E.g.
@@ -1084,7 +1100,8 @@ class FuelOverlay {
      * Installation Guide p. 6-14: "if your GALS USED reads higher than you expect,
      * increase the K-factor"), so New K = Current K × Ratio.
      * @returns {{actual: number, tracked: number, pairs: number,
-     *            excluded: {older: number, unusable: number, reset: number, unconfirmed: number, outlier: number}}}
+     *            excluded: {older: number, unusable: number, reset: number, unconfirmed: number,
+     *                       gap: number, outlier: number}}}
      */
     _computeKFactor() {
         const toMs = (v) => {
@@ -1102,6 +1119,7 @@ class FuelOverlay {
             const stopGal = Number(m.fuel_stop_gal);
             const dropped = Number(m.dropped_applied_since_init_gal);
             const flow = (m.flow_burn_since_init_gal == null) ? NaN : Number(m.flow_burn_since_init_gal);
+            const gap = (m.gap_burn_since_init_gal == null) ? NaN : Number(m.gap_burn_since_init_gal);
             return {
                 ts: toMs(m.measured_at) ?? (Number.isFinite(m.ts) ? m.ts : 0),
                 tic: m.total_gal,
@@ -1115,6 +1133,7 @@ class FuelOverlay {
                 stale: m.tracked_stale === true,
                 dropped: Number.isFinite(dropped) && dropped > 0 ? dropped : 0,
                 flowBurn: Number.isFinite(flow) ? flow : null,
+                gapBurn: Number.isFinite(gap) ? gap : null,
             };
         }).sort((a, b) => a.ts - b.ts);
 
@@ -1129,7 +1148,7 @@ class FuelOverlay {
             if (!stopEntryTimes.some(e => Math.abs(e - t) <= MATCH_MS)) legacyStopTimes.push(t);
         }
 
-        const excluded = { older: 0, unusable: 0, reset: 0, unconfirmed: 0, outlier: 0 };
+        const excluded = { older: 0, unusable: 0, reset: 0, unconfirmed: 0, gap: 0, outlier: 0 };
         const candidates = [];
         for (let i = 1; i < entries.length; i++) {
             const prev = entries[i - 1];
@@ -1144,6 +1163,10 @@ class FuelOverlay {
             const a = prev.tic - (next.tic - next.stopGal);
             const t = next.flowBurn != null ? next.flowBurn : prev.tic - next.ref - next.dropped;
             if (!(a > 0) || !(t > 0)) { excluded.unusable++; continue; }
+            if (next.gapBurn != null &&
+                next.gapBurn > Math.max(FuelOverlay.KF_GAP_MIN_GAL, FuelOverlay.KF_GAP_FRAC * a)) {
+                excluded.gap++; continue;
+            }
             candidates.push({ a, t, r: t / a });
         }
 
@@ -1174,6 +1197,7 @@ class FuelOverlay {
         const parts = [
             [excluded.reset, 'tracker reset', 'tracker resets'],
             [excluded.unconfirmed, 'unconfirmed', 'unconfirmed'],
+            [excluded.gap, 'comms gap', 'comms gaps'],
             [excluded.outlier, `more than ${Math.round(FuelOverlay.KF_OUTLIER_FRAC * 100)}% off`,
                 `more than ${Math.round(FuelOverlay.KF_OUTLIER_FRAC * 100)}% off`],
             [excluded.unusable, 'unusable reading', 'unusable readings'],

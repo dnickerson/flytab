@@ -127,6 +127,13 @@ describe('EnginePage FUEL STATUS — canonical remaining fuel', () => {
         expect(out.range).toBe('270');        // 18 gal * 15 nm/gal
     });
 
+    it('ENDURANCE never shows 60 minutes: 1.995 h reads 2:00, not 1:60 (review I2)', () => {
+        setup({ tankL: 9, tankR: 8.955 });      // 17.955 gal / 9 gph = 1.995 h = 119.7 min
+        expect(fuelFields({ fuel_flow: 9 }).endurance).toBe('2:00');
+        setup({ tankL: 9, tankR: 8.91 });       // 17.91 / 9 = 1.99 h = 119.4 min
+        expect(fuelFields({ fuel_flow: 9 }).endurance).toBe('1:59');
+    });
+
     it('honours a manual fuel override ahead of tank state and EDM', () => {
         setup({ tankL: 10, tankR: 8, manual: 22 });
         const out = fuelFields({ Fuel_Remaining: 30, fuel_flow: 0 });
@@ -220,6 +227,25 @@ describe('EnginePage FUEL STATUS — stale tracked state is marked, not silently
         expect(out.staleShown).toBe(true);
         expect(page._dom.fuelStale.textContent).toMatch(/ENGINE DATA LOST/);
         expect(page._dom.fuelStale.textContent).toMatch(/REMAINING MAY READ HIGH/);
+    });
+
+    it('stuck fuel-flow sender (flow_lost_reason zero_flow): its own wording, not "engine data lost"', () => {
+        setup({ tankL: 9, tankR: 9 });
+        FuelTankState._state.flow_lost_at = new Date().toISOString();
+        FuelTankState._state.flow_lost_reason = 'zero_flow';
+        FuelTankState._save();
+        fuelFields(engine);
+        expect(page._dom.fuelStale.textContent).toBe(EnginePage.FUEL_ZERO_FLOW_TEXT);
+        expect(page._dom.fuelStale.textContent).toMatch(/FUEL FLOW READS 0 WITH THE ENGINE RUNNING/);
+        expect(page._dom.fuelStale.textContent).not.toMatch(/ENGINE DATA LOST/);
+    });
+
+    it('flow lost with no reason stored (state from before the field): data-lost wording', () => {
+        setup({ tankL: 9, tankR: 9 });
+        FuelTankState._state.flow_lost_at = new Date().toISOString();
+        FuelTankState._save();
+        fuelFields(engine);
+        expect(page._dom.fuelStale.textContent).toBe(EnginePage.FUEL_FLOW_LOST_TEXT);
     });
 
     it('the 45-min case keeps its own wording', () => {

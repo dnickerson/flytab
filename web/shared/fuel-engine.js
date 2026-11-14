@@ -114,16 +114,56 @@ class FuelEngine {
      * Calculate fuel endurance from gallons and burn rate.
      * @param {number} gallons - Fuel quantity
      * @param {number} gph - Burn rate in gallons per hour
+     * Total minutes are rounded first and then split, so hours × 60 + minutes is
+     * always totalMin and minutes is 0-59 (119.6 min → 2:00, never 1:60).
      * @returns {{ hours: number, minutes: number, totalMin: number }}
      */
     static endurance(gallons, gph) {
         if (!gallons || !gph || gph <= 0) return { hours: 0, minutes: 0, totalMin: 0 };
-        const totalMin = (gallons / gph) * 60;
-        return {
-            hours: Math.floor(totalMin / 60),
-            minutes: Math.round(totalMin % 60),
-            totalMin: Math.round(totalMin),
-        };
+        const { h, m, totalMin } = FuelEngine.splitHm((gallons / gph) * 60, 'min');
+        return { hours: h, minutes: m, totalMin };
+    }
+
+    /**
+     * The one h:mm splitter. Rounds the TOTAL to whole minutes first, then splits,
+     * so minutes is always 0-59 and h × 60 + m = totalMin (119.6 min → 2:00; the old
+     * floor(h) / round(rest) split showed "1:60").
+     * @param {number} value - the duration
+     * @param {'min'|'hr'|'s'} [unit='min']
+     * @returns {{h: number, m: number, totalMin: number}}
+     */
+    static splitHm(value, unit = 'min') {
+        const perMin = unit === 'hr' ? 60 : unit === 's' ? 1 / 60 : 1;
+        const totalMin = Math.round(value * perMin);
+        return { h: Math.floor(totalMin / 60), m: totalMin % 60, totalMin };
+    }
+
+    /**
+     * Format a duration with splitHm(). Styles (each byte-identical to the
+     * formatter it replaced):
+     *   'colon'    "H:MM"                          (ENG page / ENG panel endurance,
+     *                                               route planner altitude ETE, fuel-stop picker)
+     *   'colonOrM' "H:MM", or "Mm" under an hour   (instrument strip / route table /
+     *                                               power tradeoff ETE)
+     *   'hm'       "Hh MMm"                        (route planner summary ETE)
+     *   'hThinM'   "Hh Mm" (thin space), or "Mm"   (fuel-stop overlay ETE)
+     *   'hMin'     "H h M min"                     (position health durations)
+     * @param {number} value
+     * @param {'min'|'hr'|'s'} unit
+     * @param {string} style
+     * @returns {string}
+     */
+    static formatHm(value, unit, style) {
+        const { h, m } = FuelEngine.splitHm(value, unit);
+        const mm = String(m).padStart(2, '0');
+        switch (style) {
+            case 'colonOrM': return h > 0 ? `${h}:${mm}` : `${m}m`;
+            case 'hm':       return `${h}h ${mm}m`;
+            case 'hThinM':   return h > 0 ? `${h}h\u2009${m}m` : `${m}m`;
+            case 'hMin':     return `${h} h ${m} min`;
+            case 'colon':
+            default:         return `${h}:${mm}`;
+        }
     }
 
     /**

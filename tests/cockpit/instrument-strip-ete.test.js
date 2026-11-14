@@ -7,6 +7,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
+import { readFileSync as readFileSyncFE } from 'fs';
+// FuelEngine.formatHm is the shared h:mm helper (loaded before every cockpit module in index.html).
+globalThis.FuelEngine = globalThis.FuelEngine || new Function(readFileSyncFE('web/shared/fuel-engine.js', 'utf8') + '\nreturn FuelEngine;')();
 
 const read = (p) => readFileSync(p, 'utf8');
 globalThis.ActiveRoute = new Function(read('web/shared/active-route.js') + '\nreturn ActiveRoute;')();

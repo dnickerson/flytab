@@ -112,7 +112,8 @@ public class EngineMLPlugin extends Plugin {
             float altitude = f(call, "altitude");
             float mp = f(call, "mp");
             float carbTemp = f(call, "carb_temp");
-            float fuelRemaining = f(call, "fuel_remaining");
+            // Missing / non-numeric / negative → unknown (-1), never 0 (= empty tanks).
+            float fuelRemaining = EngineAdvisor.fuelRemainingFromPayload(call.getDouble("fuel_remaining", null));
             float groundSpeed = f(call, "ground_speed");
             float distanceNm = f(call, "distance_nm");
 

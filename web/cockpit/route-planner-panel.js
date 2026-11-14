@@ -1059,12 +1059,7 @@ class RoutePlannerPanel {
             : this._fetchingWinds ? 'calm-air \xb7 winds loading…'
             : 'calm-air \xb7 no wind data';
 
-        const fmtEte = (hrs) => {
-            let h = Math.floor(hrs);
-            let m = Math.round((hrs - h) * 60);
-            if (m === 60) { h += 1; m = 0; }
-            return `${h}:${String(m).padStart(2, '0')}`;
-        };
+        const fmtEte = (hrs) => RoutePlannerPanel.fmtHrs(hrs, 'colon');
 
         let html = '<div class="rpp-opt-header">';
         html += '<span>ALT</span><span>ETE</span><span>WIND</span><span>GS</span><span>GAL</span>';
@@ -1905,7 +1900,7 @@ class RoutePlannerPanel {
         // ETE
         const eteHrs = summary?.totalEteHrs;
         const eteLabel = eteHrs != null
-            ? (() => { const h = Math.floor(eteHrs); const m = Math.round((eteHrs - h) * 60); return `${h}h ${String(m).padStart(2,'0')}m`; })()
+            ? RoutePlannerPanel.fmtHrs(eteHrs, 'hm')
             : '';
 
         // ETA — local time at the destination
@@ -2490,8 +2485,7 @@ class RoutePlannerPanel {
         // downloaded by plan sync (review, 2026-10-16).
         const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         return new Promise(resolve => {
-            const hh = Math.floor(candidate.cumHrsAtStop);
-            const mm = String(Math.round((candidate.cumHrsAtStop - hh) * 60)).padStart(2, '0');
+            const cumHm = RoutePlannerPanel.fmtHrs(candidate.cumHrsAtStop, 'colon');
             const overlay = document.createElement('div');
             overlay.style.cssText =
                 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;' +
@@ -2510,7 +2504,7 @@ class RoutePlannerPanel {
                   <div>
                     <div style="font-size:17px;font-weight:800;color:var(--text-primary,#1a1a2e)">⛽ Fuel Stop Required</div>
                     <div style="font-size:13px;font-weight:700;color:var(--text-secondary,#444444);margin-top:4px">
-                      Near ${esc(candidate.afterFixId)} · ${hh}:${mm} flight time
+                      Near ${esc(candidate.afterFixId)} · ${cumHm} flight time
                     </div>
                   </div>
                   <button class="rpp-fs-skip" style="background:var(--bg-surface,#f5f5f5);
@@ -3535,6 +3529,13 @@ class RoutePlannerPanel {
     }
 
     // ── Utilities ─────────────────────────────────────────────────────────────
+
+    /** Hours → "H:MM" (style 'colon') or "Hh MMm" (style 'hm'), via FuelEngine.formatHm
+     *  (total minutes rounded first: 1.995 h is "2:00" / "2h 00m", never "1:60").
+     *  @param {number} hrs  @param {'colon'|'hm'} style */
+    static fmtHrs(hrs, style) {
+        return FuelEngine.formatHm(hrs, 'hr', style === 'hm' ? 'hm' : 'colon');
+    }
 
     _toast(msg, duration = 2500) {
         const host = this._el || document.body;

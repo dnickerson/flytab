@@ -192,11 +192,15 @@ class FuelTanksDisplay {
         // presenting the last reading as current.
         this._lastGph = edmCurrent ? gph : 0;
         if (edmCurrent) {
+            const now = Date.now();
             const n = Number(gph);
             this._lastCurrentGph = Number.isFinite(n) ? n : 0;
             const r = Number(d.RPM ?? d.rpm);
             this._lastCurrentRpm = Number.isFinite(r) ? r : 0;
-            if (gph > 0) FuelTankState.onSample(gph, Date.now());
+            // One engine-model transition per current frame (FuelTankState.onFrame):
+            // RPM decides running vs stopped, never fuel flow; frames with flow
+            // integrate burn and book any unbooked running time.
+            FuelTankState.onFrame(now, gph, Number.isFinite(r) ? r : undefined);
         } else {
             // Burn is not being integrated. If the engine was running, the tracked
             // figure now reads high: mark it UNCONFIRMED at once (cleared by the next
@@ -417,7 +421,7 @@ class FuelTanksDisplay {
         const leftGal = parseFloat(this._dom.initL.value);
         const rightGal = parseFloat(this._dom.initR.value);
         if (isNaN(leftGal) || isNaN(rightGal) || leftGal < 0 || rightGal < 0) return;
-        FuelTankState.init(leftGal, rightGal, this._initSelectedTank);
+        FuelTankState.init(leftGal, rightGal, this._initSelectedTank, 'reentry');
         this._dom.initPanel.style.display = 'none';
         this._initPanelDirty = false;
         this._initPanelMode = null;

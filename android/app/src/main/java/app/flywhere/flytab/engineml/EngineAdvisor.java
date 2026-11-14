@@ -19,7 +19,8 @@ public class EngineAdvisor {
     // ── Engine constants ──────────────────────────────────────
     private static final float RATED_HP = 180f;
     private static final float FUEL_WEIGHT_LB_PER_GAL = 6.0f;
-    private static final float TANK_CAPACITY_GAL = 36f;
+    /** fuel_remaining value meaning "unknown" (engine-ml.js sends -1). */
+    static final float FUEL_UNKNOWN = -1f;
     private static final float RESERVE_HOURS = 1.0f;
 
     // BSFC values (lb/hp/hr) for mixture settings
@@ -67,7 +68,8 @@ public class EngineAdvisor {
     // Current extra values
     private float currentMP = 0;
     private float currentCarbTemp = 0;
-    private float currentFuelRemaining = 0;
+    /** Fuel on board (gal) from the JS payload; < 0 (FUEL_UNKNOWN) = unknown. */
+    private float currentFuelRemaining = FUEL_UNKNOWN;
     private float currentAltitude = 0;
 
     private String lastPhase = null;
@@ -87,6 +89,16 @@ public class EngineAdvisor {
             this.severity = severity;
             this.category = category;
         }
+    }
+
+    /**
+     * The processSample payload's fuel_remaining (PluginCall.getDouble(key, null)):
+     * missing / non-numeric (null), NaN, infinite or negative → FUEL_UNKNOWN; else
+     * the figure as is (0 is a real, empty figure).
+     */
+    static float fuelRemainingFromPayload(Double v) {
+        if (v == null || v.isNaN() || v.isInfinite() || v < 0) return FUEL_UNKNOWN;
+        return v.floatValue();
     }
 
     public EngineAdvisor() {
@@ -172,8 +184,10 @@ public class EngineAdvisor {
             addMixtureAdvisory(features, advisories);
         }
 
-        // ── 5. Route-aware fuel optimization (cruise with route data) ──
-        if ("cruise".equals(phase) && distRemainingNm > 0 && groundSpeedKts > 30) {
+        // ── 5. Route-aware fuel optimization (cruise with route data, fuel known) ──
+        // Unknown fuel (< 0) skips it: no fallback to an assumed quantity.
+        if ("cruise".equals(phase) && distRemainingNm > 0 && groundSpeedKts > 30
+                && currentFuelRemaining >= 0) {
             addRouteAdvisory(features, distRemainingNm, groundSpeedKts, advisories);
         }
 
@@ -439,7 +453,7 @@ public class EngineAdvisor {
         float rpm = features[IDX_RPM];
         float alt = currentAltitude;
         float currentGPH = features[IDX_FUEL_FLOW];
-        float fuelRemaining = currentFuelRemaining > 0 ? currentFuelRemaining : TANK_CAPACITY_GAL;
+        float fuelRemaining = currentFuelRemaining;   // >= 0, checked by advise(); 0 = empty
         float pctPower = currentMP > 0 ? computePercentPower(rpm, currentMP, alt) : 65f;
 
         // Time and fuel to destination at current settings
@@ -547,7 +561,7 @@ public class EngineAdvisor {
         historyHead = 0;
         currentMP = 0;
         currentCarbTemp = 0;
-        currentFuelRemaining = 0;
+        currentFuelRemaining = FUEL_UNKNOWN;
         lastPhase = null;
     }
 }
