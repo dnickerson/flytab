@@ -1,5 +1,5 @@
 /**
- * VnePill — "VNE 161  VA 94  @ 8,000" on the map, right side, just under the engine box
+ * VnePill — "VNE 161  VA 94" over "@ 8,000 · 40°F · 3H AGO" on the map, right side, just under the engine box
  * (cockpit/engine-overlay.js). Tapping it opens / closes the Vne / Va card (cockpit/vne-panel.js),
  * which it places just under itself. Design: docs/superpowers/specs/2026-11-13-vne-va-map-pill-design.md.
  *

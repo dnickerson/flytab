@@ -163,6 +163,32 @@ describe('what the pill shows', () => {
             expect(pillText()).toContain('· 59°F · just now');
         });
 
+        it('a pushed OAT alone (setInputs) leaves the altimeter\'s and altitude\'s age alone', () => {
+            build();
+            type('altimeter', '29.92'); type('alt', '8000'); type('oatF', '59');
+            vi.setSystemTime(T0 + 3 * 3600000);
+            panel.setInputs({ oatF: 41 }, 'test feed');
+            expect(pillText()).toContain('· 41°F · 3h ago');
+        });
+
+        it('clearing a field and entering the same value again dates it anew', () => {
+            build();
+            type('altimeter', '29.92'); type('alt', '8000'); type('oatF', '59');
+            vi.setSystemTime(T0 + 3 * 3600000);
+            type('altimeter', ''); type('altimeter', '29.92');
+            type('alt', ''); type('alt', '8000');
+            type('oatF', ''); type('oatF', '59');
+            expect(pillText()).toContain('· 59°F · just now');
+        });
+
+        it('a field dated in the future while the app runs (clock set back) reads "age ?", not fresh (review)', () => {
+            build();
+            type('altimeter', '29.92'); type('alt', '8000'); type('oatF', '59');   // clock a day ahead: T0
+            vi.setSystemTime(T0 - 24 * 3600000);                                    // clock corrected
+            type('altimeter', '29.90');                                             // only one re-entered
+            expect(pillText()).toContain('· age ?');
+        });
+
         it('ageText boundaries', () => {
             const at = T0;
             expect(VnePill.ageText(at, at + 59 * 1000)).toBe('just now');

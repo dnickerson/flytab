@@ -222,13 +222,14 @@ class VnePanel extends EventTarget {
     }
 
     /** The age the pill shows: the time of the OLDEST filled-in altimeter / altitude / OAT entry
-     *  (ms), or null when none is filled in or any filled-in one has no time. */
+     *  (ms), or null when none is filled in or any filled-in one has no time, or a time in the
+     *  future (the tablet clock was set back after it was entered). */
     inputsAt() {
         let oldest = null;
         for (const k of VnePanel.AGE_FIELDS) {
             if (!String(this._state[k] || '').trim()) continue;
             const t = this._fieldAt[k];
-            if (t == null) return null;
+            if (t == null || t > Date.now() + 60000) return null;
             oldest = oldest == null ? t : Math.min(oldest, t);
         }
         return oldest;
