@@ -18,7 +18,12 @@
  * saved → no Va. The card lists the weights it used so an old passenger weight is visible.
  *
  * State: this._state holds the fields AS TYPED (strings): { altimeter, alt, oatF, kias }.
- * Manual edits are saved to Settings 'vne_inputs' (flypi_vne_inputs). Values pushed through
+ * Manual edits are saved to Settings 'vne_inputs' (flypi_vne_inputs) with `at`: the time (ms)
+ * each of altimeter, altitude and OAT was last changed, so the pill can show how old the entries
+ * are (Dana 2026-11-13, option 1: an always-on pill fed by entries from an earlier flight read
+ * Vne 164 where 154 was right). The pill shows the age of the OLDEST of the three; KIAS does
+ * not count (it does not change Vne), so typing KIAS never makes old entries look fresh. A
+ * field with no time (saved before v13.19) makes the age unknown ("age ?"). Values pushed through
  * setInputs() (the live-data hook) are shown with their source and NOT saved; the next manual
  * edit switches back to "Manual entry" and saves everything.
  *
@@ -33,6 +38,7 @@
 class VnePanel extends EventTarget {
     static REFRESH_MS = 15000;
     static FIELDS = ['altimeter', 'alt', 'oatF', 'kias'];
+    static AGE_FIELDS = ['altimeter', 'alt', 'oatF'];   // the entries Vne depends on (not KIAS)
 
     constructor(container) {
         super();
@@ -40,6 +46,8 @@ class VnePanel extends EventTarget {
         this._el = null;
         this._source = 'manual';
         this._state = VnePanel._loadState();
+        this._fieldAt = VnePanel._loadFieldAt();   // { altimeter, alt, oatF }: ms last changed, null = unknown
+        this._prev = { ...this._state };            // to see which fields an edit changed
         this._last = null;
         this._buildDOM();
         this._onExternal = () => this.refresh();
@@ -85,6 +93,8 @@ class VnePanel extends EventTarget {
             vneKias: r.ok ? r.vneKias : null,
             vaKias: r.vaKias ?? null,
             altFt: r.ok ? alt : null,
+            oatF: r.ok ? AirspeedLimits.parseNumber(this._state.oatF) : null,
+            inputsAt: this.inputsAt(),   // ms of the oldest altimeter / altitude / OAT entry, null = unknown
             overGross: !!r.overGross,
         };
     }
@@ -117,6 +127,13 @@ class VnePanel extends EventTarget {
         if (fin(values.oatF)) this._state.oatF = VnePanel._fmtEntry(values.oatF, 'oatF');
         else if (fin(values.oatC)) this._state.oatF = VnePanel._fmtEntry(AirspeedLimits.cToF(values.oatC), 'oatF');
         if (fin(values.kias)) this._state.kias = VnePanel._fmtEntry(values.kias, 'kias');
+        // A feed's values are fresh even when unchanged: date exactly the age fields it set.
+        const now = Date.now(), set = [];
+        if (fin(values.pressureAltFt)) set.push('altimeter', 'alt');
+        else { if (fin(values.altimeterInHg)) set.push('altimeter'); if (fin(values.indicatedAltFt)) set.push('alt'); }
+        if (fin(values.oatF) || fin(values.oatC)) set.push('oatF');
+        for (const k of set) this._fieldAt[k] = now;
+        this._prev = { ...this._state };
         this._source = String(source || 'live');
         this._syncInputs();
         this._render();
@@ -183,9 +200,52 @@ class VnePanel extends EventTarget {
         return s;
     }
 
+    /** A stored time (ms) that can be trusted: finite, positive, not more than a minute ahead (clock changed). */
+    static _validAt(t) {
+        return typeof t === 'number' && Number.isFinite(t) && t > 0 && t <= Date.now() + 60000 ? t : null;
+    }
+
+    /** When each age field was last changed: { altimeter, alt, oatF } in ms, null = unknown. */
+    static _loadFieldAt() {
+        const out = { altimeter: null, alt: null, oatF: null };
+        let saved = null;
+        try {
+            saved = (typeof Settings !== 'undefined') ? Settings.vneInputs : null;
+        } catch (_) { saved = null; }
+        if (!saved || typeof saved !== 'object') return out;
+        const at = saved.at && typeof saved.at === 'object' ? saved.at : null;
+        for (const k of VnePanel.AGE_FIELDS) {
+            // `savedAt` (one time for all fields) was written by the v13.18 test build only.
+            out[k] = VnePanel._validAt(at ? at[k] : saved.savedAt);
+        }
+        return out;
+    }
+
+    /** The age the pill shows: the time of the OLDEST filled-in altimeter / altitude / OAT entry
+     *  (ms), or null when none is filled in or any filled-in one has no time, or a time in the
+     *  future (the tablet clock was set back after it was entered). */
+    inputsAt() {
+        let oldest = null;
+        for (const k of VnePanel.AGE_FIELDS) {
+            if (!String(this._state[k] || '').trim()) continue;
+            const t = this._fieldAt[k];
+            if (t == null || t > Date.now() + 60000) return null;
+            oldest = oldest == null ? t : Math.min(oldest, t);
+        }
+        return oldest;
+    }
+
+    /** Date the age fields whose value differs from the last one seen. */
+    _stampChanged(now = Date.now()) {
+        for (const k of VnePanel.AGE_FIELDS) {
+            if (this._state[k] !== this._prev[k]) this._fieldAt[k] = now;
+        }
+        this._prev = { ...this._state };
+    }
+
     _save() {
         try {
-            if (typeof Settings !== 'undefined') Settings.vneInputs = { ...this._state };
+            if (typeof Settings !== 'undefined') Settings.vneInputs = { ...this._state, at: { ...this._fieldAt } };
         } catch (_) { /* storage full / blocked: the card still works this session */ }
     }
 
@@ -292,6 +352,7 @@ class VnePanel extends EventTarget {
 
     _edited() {
         this._source = 'manual';
+        this._stampChanged();
         this._syncInputs();
         this._save();
         this._render();

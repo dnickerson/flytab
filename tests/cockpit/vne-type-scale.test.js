@@ -5,9 +5,10 @@
  * applied to this card 2026-11-13) - var(--text-sm) 16 px for everything read or tapped,
  * var(--text-xs) 14 px for labels only, one font (--font-ui), weight >= 700, text colours only from
  * the >= 7:1 list, no hex colours.
- * Pill (.vne-pill*): a map instrument styled like an engine box row (Dana 2026-11-13: "same height
- * as the engine rows") - the same padding, border, corners and label / value fonts as
- * .engine-overlay-field / -label / -value.
+ * Pill (.vne-pill*): a map instrument styled like an engine box row (Dana 2026-11-13) - the same
+ * padding, border, corners and label / value fonts as .engine-overlay-field / -label / -value.
+ * Since v13.18 it has a second line (altitude, OAT, age of the entries), so it is taller than one
+ * engine row; these tests guard the styling, not the height.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';

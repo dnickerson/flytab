@@ -1,10 +1,13 @@
 /**
- * VnePill — "VNE 161  VA 94  @ 8,000" on the map, right side, just under the engine box
+ * VnePill — "VNE 161  VA 94" over "@ 8,000 · 40°F · 3H AGO" on the map, right side, just under the engine box
  * (cockpit/engine-overlay.js). Tapping it opens / closes the Vne / Va card (cockpit/vne-panel.js),
  * which it places just under itself. Design: docs/superpowers/specs/2026-11-13-vne-va-map-pill-design.md.
  *
- * Shows whatever the card last worked out (summary()), with the altitude those numbers are for,
- * since the entries are manual and do not follow the aircraft. Never turns red: an old KIAS
+ * Shows whatever the card last worked out (summary()), with the altitude and OAT those numbers
+ * are for and how old the entries are ("@ 8,000 · 40°F · 3h ago" on a second line), since the
+ * entries are manual, do not follow the aircraft and are kept between flights (Dana 2026-11-13,
+ * option 1). The age is the oldest of the altimeter / altitude / OAT entries (KIAS does not count)
+ * and counts on with the card's 15 s refresh; entries saved before it existed read "age ?". Never turns red: an old KIAS
  * entry would make a red pill misleading; the over-Vne warning lives in the card.
  *
  * Placement: the engine box is absolutely positioned at top 156 px (top-right) and grows a row
@@ -61,8 +64,28 @@ class VnePill {
         const q = (k) => this._el.querySelector(`[data-pill="${k}"]`);
         q('vne').textContent = s.vneKias == null ? '—' : String(s.vneKias);
         q('va').textContent = s.vaKias == null ? '—' : String(s.vaKias);
-        q('alt').textContent = (s.ok && Number.isFinite(s.altFt)) ? `@ ${Math.round(s.altFt).toLocaleString('en-US')}` : '';
+        const parts = [];
+        if (s.ok && Number.isFinite(s.altFt)) {
+            parts.push(`@ ${Math.round(s.altFt).toLocaleString('en-US')}`);
+            if (Number.isFinite(s.oatF)) parts.push(`${Math.round(s.oatF)}°F`);
+            parts.push(VnePill.ageText(s.inputsAt));
+        }
+        q('alt').textContent = parts.join(' · ');
         q('alt').hidden = !q('alt').textContent;
+        // The second line appears / goes with the entries, so the pill's height changes: move the
+        // card with it (an open card would otherwise cover the age line or leave a gap).
+        this.place();
+    }
+
+    /** How old the entries are: "just now", "12m ago", "3h ago", "5d ago"; "age ?" when unknown. */
+    static ageText(at, now = Date.now()) {
+        if (typeof at !== 'number' || !Number.isFinite(at)) return 'age ?';
+        if (at - now > 60000) return 'age ?';             // clock moved back: the age is not known
+        const min = Math.max(0, (now - at) / 60000);
+        if (min < 1) return 'just now';
+        if (min < 60) return `${Math.floor(min)}m ago`;
+        if (min < 48 * 60) return `${Math.floor(min / 60)}h ago`;
+        return `${Math.floor(min / 1440)}d ago`;
     }
 
     /** The engine box when it is on the right-hand top slot, else null. */
