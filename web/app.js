@@ -899,6 +899,16 @@ class FlyTabApp {
         if (typeof WbOverlay !== 'undefined') {
             this.wbOverlay = new WbOverlay(document.body);
         }
+        // Vne / Va pill on the map, under the engine box (created above), and the card it
+        // opens: TAS-limited Vne as KIAS from altimeter/altitude/OAT, Va for the saved W&B weights.
+        this._guard('Vne pill', () => {
+            const view = document.getElementById('primaryView');
+            if (view && typeof VnePanel !== 'undefined' && typeof VnePill !== 'undefined'
+                    && typeof AirspeedLimits !== 'undefined') {
+                this.vnePanel = new VnePanel(view);
+                this.vnePill = new VnePill(view, this.vnePanel);
+            }
+        });
 
         // Synthetic per-tank fuel gauges — mounted inside map-area so position:absolute
         // is relative to the map, not the viewport (avoids overlapping top rail)

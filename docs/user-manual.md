@@ -133,6 +133,31 @@ Tap **DISMISS** to hide it for the current problem; it returns only if a new pro
 
 **Engine box** — Top right of the map, below the corner buttons: live engine values from the engine monitor (EDM), CARB TEMP by default. Choose what it shows in the layer panel under **Map Engine Box** — up to 6 of CARB TEMP, RPM, MP, FF (fuel flow), % PWR, OIL TEMP, OIL PRESS, CHT MAX (hottest cylinder), EGT MAX, VOLTS, AMPS, FUEL PRESS, FUEL L and FUEL R (tank levels), EGT 1–4 and CHT 1–4 (each cylinder), EGT SPREAD and CHT SPREAD (hottest minus coolest cylinder), and OAT. **OAT is not measured:** the Dynon D-180 does not send its OAT on either serial port, so FlyTab shows the engine monitor's value, labelled **OAT ISA** (standard atmosphere at your pressure altitude) or **OAT ATIS** (the temperature you entered on the ENG page — shown only on the ground, below 40 kt; airborne it is ISA again, since the ATIS value is the field's); it reads **--** until the engine monitor has a pressure altitude. The box updates as soon as you flip a toggle and remembers the choice on this tablet. Values are colored with exactly the same limits as the ENG page: CARB TEMP amber above 32°F up to 70°F (carb-ice range) and red at 32°F or below (0 or below means no probe and isn't colored); OIL TEMP amber from 220°F, red from 245°F; OIL PRESS red at or below 25 or at or above 100 psi, amber at or below 55 or at or above 95; CHT MAX amber from 380°F, red from 435°F; EGT MAX amber from 1500°F, red from 1650°F (limits changed in the config's `enginePage` section apply to both). MP, FF, % PWR and VOLTS show **--** when they read zero (as on the ENG page), as does a cylinder's EGT or CHT (an unfitted probe); FUEL PRESS and FUEL L/R show **0** (a failed pump, vapor lock or an empty tank must not look like a missing sensor); single cylinders use the CHT MAX / EGT MAX colors. Every value shows **--** whenever the engine monitor isn't sending current data — including when the Pi is up but the EDM itself has gone quiet for 5 seconds — rather than an old reading.
 
+**Vne / Va pill** — Just under the engine box, styled like one of its rows (in its place when the engine box is off): **VNE 161  VA 94  @ 8,000** — the highest indicated speed allowed at that altitude, your maneuvering speed at your current weight, and the altitude those numbers are for. Tap it to open the Vne / Va card over the map; tap the pill again or **✕** to close it. The entries are manual, so the pill does **not** follow you as you climb or descend — the **@ altitude** tells you which altitude it was worked out for. **—** means a value can't be worked out yet (see below). The pill never turns red; the over-Vne warning is in the card.
+
+*Why Vne changes with altitude:* Van's sets the RV-9A's Vne at 210 mph (182.5 kt, used as 182) for **both** indicated and true airspeed, whichever is reached first — flutter depends on true airspeed. The D-180 red line does not move with altitude, so at altitude you can reach 182 KTAS before the tape turns red. FlyTab works out the indicated speed at which you reach it.
+
+*Why Va changes with weight:* Va is 102 KIAS at 1,800 lb (max gross). A lighter airplane stalls at a lower speed, so Va drops with the square root of weight: about 94 KIAS at 1,534 lb, 84 at 1,224 lb. Va does not change with altitude. It is never shown above 102; over gross the card says **⚠ Over gross**.
+
+**Card layout, top to bottom:** **KIAS** and **Altitude** (the entries you change most), then **Vne here / Va** and the WITHIN / AT / OVER VNE badge right under them, then **Altimeter** and **OAT °F**, then the explanation (which limit governs, the weights used, pressure and density altitude, Vno / Vfe, notes).
+
+**Enter in the card** (manual entry; every value is kept for next time):
+- **Altimeter** — the setting in the Kollsman window, inHg. Range 27.50 to 31.50. **−.01 / +.01** buttons (an empty field starts at 29.92) or type it with its decimal point — **3012** is refused, type **30.12**.
+- **Altitude** — what the altimeter reads, ft. **−500 / +500** buttons or type it. FlyTab turns altimeter + altitude into pressure altitude; if that is outside −1,000 to 18,000 ft it is refused (shown in red with the pressure altitude and the range), never rounded to the nearest limit.
+- **OAT °F** — **−1 / +1** buttons start from the standard temperature at the entered altitude. Use OAT, not TAT.
+- **±** changes the sign of the altitude or OAT (the tablet keyboard may have no minus key).
+- **KIAS** — optional; **✕** clears.
+
+**Read in the card:**
+- **Vne here: NNN KIAS**, always rounded **down**, with the limit that governs: *182 KTAS governs* (true-airspeed limit comes first) or *182 KIAS governs* (the normal red line comes first — low and cold).
+- **Va: NN KIAS**, rounded **down**, and the weight it was worked out from: *Weight 1,534 lb · Pilot 190 · Passenger 170 · Baggage 20 · Fuel 20.0 gal*. The pilot, passenger and baggage weights are the ones on the **W&B** page (MORE → Weight & Balance) — they are kept until you change them there, so **check the passenger and baggage weights after a flight with a different load**. Fuel is your tracked fuel, as everywhere else. When fuel is not tracked, or tracking is not current (it may read high), fuel is **left out** — *fuel not counted* — which makes Va lower, the safe side. With no pilot weight on the W&B page the card says *Enter weights in W&B for Va* and the pill shows **Va —**. Va follows fuel burn and W&B changes by itself.
+- With KIAS entered: the TAS (rounded **up**) and a badge — **✓ WITHIN VNE · margin N kt**, **⚠ AT VNE** (KIAS equal to Vne here) or **⚠ OVER VNE by N kt** (red badge and a red frame around the result).
+- Pressure altitude, density altitude and ISA deviation.
+- **Vno 156 · Vfe 78 KIAS** — indicated limits, shown for reference only; they do not change with altitude.
+- *IAS ≈ CAS. Position error not applied.* No airspeed calibration is applied yet.
+
+Reference only. The POH and placards govern. At 180 kt, ram rise makes the OAT probe read 3–4 °C high, which makes the result conservative.
+
 **Sticky valve check** — A sticking exhaust valve on a cold start ("morning sickness", NTSB SA-109, Lycoming SB 388C) can cost you power on takeoff. From engine start until you apply takeoff power, FlyTab watches the engine monitor for the signs: one cylinder's EGT running far below the others, an EGT or CHT that heats up much more slowly than the other three after a cold start, and a rough, unsteady idle. It runs on the tablet, whichever page you are on. **It is advisory, not a certified instrument:** it can miss a real problem, and it is not a substitute for the checks in your engine manual. Inspect per Lycoming SB 388C; see also SI 1425A and SL L197A.
 
 **When the verdict appears.** Nothing shows until the check has made its first judgment, at the first of: you start taxiing (ground speed 3 kt or more), the engine reaches run-up RPM, or 10 minutes after start. **No banner before that means "not yet judged", not "OK".** After it first appears the verdict can still change as more of the start is measured, for example from CHECKING to NO-GO. It never goes back to a less serious warning; CHECKING, NOT RUN and PARTIAL can resolve to VALVES OK as more checks complete. **VALVE CHECK… checking** (neutral) shows only after that first judgment, on a cold start, while the slow-heat-up comparison is still waiting for its few minutes of data; it resolves by itself.
@@ -354,7 +379,7 @@ Opens a right-side drawer with infrequently used actions, organized in three sec
 | **Fuel Entry** | Manually enter fuel quantity after a fuel stop |
 | **Plan on flywhere.app** | Opens the web route planner in a browser for pre-flight planning |
 | **Weather Briefing** | Full weather briefing panel (see below) |
-| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram. Fuel pre-fills from tracked tank state — see *Fuel on the Weight & Balance page* |
+| **Weight & Balance** | Enter station weights and fuel; shows total weight, CG, and envelope status with a CG diagram. Pilot, passenger and baggage weights are kept until you change them (the Vne / Va pill uses them for Va). Fuel pre-fills from tracked tank state — see *Fuel on the Weight & Balance page* |
 | **Logbook** | View and edit flight log entries |
 | **Documents** | Library of imported and bundled reference PDFs (POHs, checklists, chart legends) with full-text search |
 | **Flight Upload** | Sync flight logs to the cloud |
@@ -1057,6 +1082,7 @@ The NASR import writes ~100,000 records to IndexedDB. If this happens during sta
 | Open approach plate | APT tab → tap airport → Approaches |
 | Check engine trends | ENG tab |
 | Log fuel stop | MORE → Fuel Entry |
+| Vne (true-airspeed limit) and Va at this altitude | Tap the **Vne / Va pill** under the engine box → enter altimeter, altitude and OAT °F |
 | Export / sync GPS track | MORE → Flight Upload |
 | Read the FAA's remarks for an airport | Tap airport → **INFO** tab → scroll to **FAA REMARKS** (tap **Contacts** / **FAA admin** to open those) |
 | Write your own notes for an airport | Tap airport → **INFO** tab → scroll to **MY NOTES** (saved automatically) |

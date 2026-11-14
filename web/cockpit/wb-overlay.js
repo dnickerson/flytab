@@ -129,8 +129,12 @@ class WbOverlay {
                 (input) => {
                     this._inputs[station.name] = input;
                     if (station.max_weight) input.max = station.max_weight;
-                    input.value = '';
+                    // Kept until changed (Dana 2026-11-13): the Vne/Va map pill works Va out
+                    // from these, and they must survive an app restart in flight.
+                    input.value = (typeof WbCalculator !== 'undefined')
+                        ? WbCalculator.savedWeightText(WbOverlay._savedWeights(), station.name) : '';
                     input.placeholder = '0';
+                    input.addEventListener('input', () => this._saveStationWeights());
                 }
             );
             grid.appendChild(card);
@@ -275,6 +279,22 @@ class WbOverlay {
                     ? '⚠ FUEL QUANTITY UNCONFIRMED — tank tracking is not current (engine data lost, or 45+ min without an update) and reads high. Verify before using this weight.'
                     : null,
         };
+    }
+
+    static _savedWeights() {
+        try {
+            return (typeof Settings !== 'undefined') ? Settings.wbStationWeights : null;
+        } catch (_) { return null; }
+    }
+
+    /** Save the non-fuel station fields as typed and tell the Vne/Va card. Fuel is never saved. */
+    _saveStationWeights() {
+        const out = {};
+        for (const [name, input] of Object.entries(this._inputs)) out[name] = String(input?.value ?? '').slice(0, 8);
+        try {
+            if (typeof Settings !== 'undefined') Settings.wbStationWeights = out;
+        } catch (_) { /* storage blocked: W&B still works this session */ }
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('wb:weightschanged'));
     }
 
     _getStationWeights() {

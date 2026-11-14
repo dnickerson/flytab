@@ -13403,3 +13403,257 @@ body:has(.checklist-page.visible) > .toast { z-index: 900; }
     outline: 4px solid var(--accent);
     outline-offset: 2px;
 }
+
+/* ========== Vne / Va map pill + card (cockpit/vne-pill.js, cockpit/vne-panel.js) ==========
+   Light theme only (FlyTab has no night mode). Warning = solid fill + icon + text, never colour
+   alone. The warning fill is --color-danger-on-light (white text ≈ 7.9:1), not --color-danger
+   (white on #ff3030 is ≈ 3.6:1, too low for a limit warning in sunlight).
+   Layering (see .sv-banner--map): pill with the engine box (400); card above the in-map widgets
+   and the sticky-valve banner (550), below the airport panel / route editor (600). Top is set
+   from JS (VnePill.place) so both sit under the engine box.
+
+   Pill: a map instrument, styled exactly like an engine box row (.engine-overlay-field and its
+   label / value) so it is the same height (Dana 2026-11-13). Its touch area reaches 8 px above and
+   below the visible box (::after) to make --touch-min.
+   Card: the layers slide-out type scale (Dana 2026-11-06) - var(--text-sm) 16 px for everything
+   read or tapped, var(--text-xs) 14 px for labels only, one font (--font-ui, tabular digits),
+   weight >= 700, text colours from the >= 7:1 list. Guarded by tests/cockpit/vne-type-scale.test.js. */
+
+.vne-pill {
+    position: absolute;
+    right: 8px;
+    top: 156px;
+    z-index: 400;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0;
+    padding: 4px 10px;
+    background: var(--bg-primary);
+    border: 1.5px solid var(--border-strong);
+    border-radius: 6px;
+    font: inherit;
+    white-space: nowrap;
+    touch-action: manipulation;
+    cursor: pointer;
+}
+.vne-pill::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -8px;
+    bottom: -8px;
+}
+.vne-pill:active { background: var(--bg-surface); }
+.vne-pill-label, .vne-pill-alt {
+    font-family: var(--font-ui);
+    font-size: var(--text-xs);
+    font-weight: 800;
+    color: var(--text-secondary);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.vne-pill b {
+    font-family: var(--font-instrument);
+    font-size: var(--text-lg);
+    font-weight: 900;
+    color: var(--text-primary);
+    padding: 0 4px 0 0;
+}
+.vne-pill-alt[hidden] { display: none; }
+
+.vne-card {
+    position: absolute;
+    right: 8px;
+    top: 208px;
+    z-index: 580;
+    width: min(380px, calc(100% - 16px));
+    max-height: calc(100% - 216px);
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 12px 12px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    background: var(--bg-primary);
+    border: 2px solid var(--border-strong);
+    border-radius: 12px;
+    box-shadow: var(--shadow-raised);
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+}
+.vne-card.visible { display: flex; }
+
+.vne-card-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 -12px;
+    padding: 4px 4px 4px 14px;
+    background: var(--bg-surface);
+    border-bottom: 2px solid var(--border-strong);
+}
+.vne-title {
+    flex: 1;
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--text-primary);
+}
+.vne-close { min-width: var(--touch-min, 56px); min-height: var(--touch-min, 56px); }
+
+/* Result: Vne / Va and the badge, right under KIAS and altitude */
+.vne-result {
+    background: var(--bg-surface);
+    border: 3px solid var(--border-strong);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.vne-result--warn { border-color: var(--color-danger-on-light); border-width: 5px; }
+
+.vne-primary-row {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+.vne-primary {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+.vne-primary-label, .vne-primary-unit {
+    font-size: var(--text-xs);
+    font-weight: 800;
+    color: var(--text-secondary);
+}
+.vne-primary-value {
+    font-size: var(--text-sm);
+    font-weight: 900;
+    color: var(--text-primary);
+}
+.vne-status {
+    font-size: var(--text-sm);
+    font-weight: 900;
+    padding: 8px 12px;
+    border-radius: 8px;
+}
+.vne-status--ok   { background: var(--color-success); color: var(--text-primary); }
+.vne-status--warn { background: var(--color-danger-on-light); color: var(--text-on-accent); }
+
+.vne-line {
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--text-primary);
+}
+
+/* Inputs */
+.vne-inputs { display: flex; flex-direction: column; gap: 10px; }
+.vne-inputs--speed { padding-top: 10px; }
+.vne-field-label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: var(--text-xs);
+    font-weight: 800;
+    color: var(--text-secondary);
+}
+.vne-field-hint {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+.vne-field-row {
+    display: flex;
+    gap: var(--touch-spacing);
+    align-items: stretch;
+}
+.vne-input {
+    flex: 1;
+    min-width: 0;
+    min-height: var(--touch-min, 56px);
+    padding: 0 8px;
+    text-align: center;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 900;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    background: var(--bg-surface-raised);
+    border: 2px solid var(--border-strong);
+    border-radius: 8px;
+}
+.vne-input:focus { outline: none; border-color: var(--accent); border-width: 3px; }
+.vne-field--error .vne-input { border-color: var(--color-danger-on-light); border-width: 3px; }
+
+.vne-step, .vne-sign, .vne-clear {
+    min-height: var(--touch-min, 56px);
+    min-width: var(--touch-min, 56px);
+    padding: 0 6px;
+    font-family: var(--font-ui);
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--text-primary);
+    background: var(--bg-surface);
+    border: 2px solid var(--border-strong);
+    border-radius: 8px;
+    touch-action: manipulation;
+    flex-shrink: 0;
+}
+.vne-step:active, .vne-sign:active, .vne-clear:active { background: var(--border); }
+.vne-spacer { min-width: var(--touch-min, 56px); flex-shrink: 0; }
+
+.vne-field-error {
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--color-danger-on-light);
+    margin-top: 4px;
+}
+.vne-field-error:empty { display: none; }
+
+/* Explanation lines, under the entries */
+.vne-explain {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+}
+.vne-governs {
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--text-primary);
+}
+.vne-secondary, .vne-note {
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
+    line-height: 1.35;
+}
+.vne-ref {
+    font-size: var(--text-sm);
+    font-weight: 800;
+    color: var(--text-primary);
+}
+.vne-ref-note {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+.vne-footnote {
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+}
