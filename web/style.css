@@ -13412,9 +13412,11 @@ body:has(.checklist-page.visible) > .toast { z-index: 900; }
    and the sticky-valve banner (550), below the airport panel / route editor (600). Top is set
    from JS (VnePill.place) so both sit under the engine box.
 
-   Pill: a map instrument, styled exactly like an engine box row (.engine-overlay-field and its
-   label / value) so it is the same height (Dana 2026-11-13). Its touch area reaches 8 px above and
-   below the visible box (::after) to make --touch-min.
+   Pill: a map instrument, styled like an engine box row (.engine-overlay-field and its label /
+   value: same padding, border, corners and fonts; Dana 2026-11-13). Two lines since v13.18: the
+   limits on the first, "@ alt · OAT · age" on the second (.vne-pill-alt, full width), so it is
+   about 1.5 engine rows tall and at most 260 px wide. Its touch area reaches 8 px above and below
+   the visible box (::after) to make --touch-min.
    Card: the layers slide-out type scale (Dana 2026-11-06) - var(--text-sm) 16 px for everything
    read or tapped, var(--text-xs) 14 px for labels only, one font (--font-ui, tabular digits),
    weight >= 700, text colours from the >= 7:1 list. Guarded by tests/cockpit/vne-type-scale.test.js. */

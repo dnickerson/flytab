@@ -85,18 +85,65 @@ describe('what the pill shows', () => {
             expect(pillText()).toContain('· 14m ago');
             vi.advanceTimersByTime(2 * 3600000);
             expect(pillText()).toContain('· 2h ago');
+            // the age is the OLDEST of altimeter / altitude / OAT: a new OAT alone leaves it at 2h
             type('oatF', '60');
-            expect(pillText()).toContain('· 60°F · just now');
+            expect(pillText()).toContain('· 60°F · 2h ago');
+            type('altimeter', '29.90'); type('alt', '8500');
+            expect(pillText()).toContain('@ 8,500 · 60°F · just now');
         });
 
-        it('the save carries savedAt and a new panel reads it back', () => {
+        it('typing KIAS, or a step that changes nothing, never makes old entries look fresh (review)', () => {
+            Settings.vneInputs = { altimeter: '30.40', alt: '8000', oatF: '20', kias: '', at: { altimeter: T0 - 3 * 3600000, alt: T0 - 3 * 3600000, oatF: T0 - 3 * 3600000 } };
+            build();
+            type('kias', '150');
+            expect(pillText()).toContain('· 3h ago');
+            const btn = (field, sel) => panel._el.querySelector(`[data-field="${field}"] ${sel}`);
+            const clearK = btn('kias', '.vne-clear');
+            expect(clearK).not.toBeNull();
+            tap(clearK);
+            expect(pillText()).toContain('· 3h ago');
+            // weights / fuel events re-work Va but leave the age alone
+            window.dispatchEvent(new Event('wb:weightschanged'));
+            window.dispatchEvent(new Event('fuelstate:changed'));
+            expect(pillText()).toContain('· 3h ago');
+            // the OAT's ± is a real change, but altimeter and altitude are still 3 h old: still 3h
+            const sign = btn('oatF', '.vne-sign');
+            expect(sign).not.toBeNull();
+            tap(sign);
+            expect(pillText()).toContain('· -20°F · 3h ago');
+        });
+
+        it('the card follows the pill when its second line appears or goes (review: it covered the age line)', () => {
+            build();
+            panel.toggle();                                     // card open
+            let h = 40;
+            Object.defineProperty(pill._el, 'offsetHeight', { configurable: true, get: () => h });
+            pill.place();
+            const before = panel._el.style.top;
+            h = 60;                                             // the second line appears
+            type('altimeter', '29.92'); type('alt', '8000'); type('oatF', '59');
+            expect(panel._el.style.top).not.toBe(before);
+            expect(parseInt(panel._el.style.top, 10)).toBe(parseInt(pill._el.style.top, 10) + 60 + 6);
+        });
+
+        it('the save carries each entry\'s time and a new panel reads it back', () => {
             build();
             type('altimeter', '29.92'); type('alt', '8000'); type('oatF', '59');
-            expect(Settings.vneInputs.savedAt).toBe(T0);
+            expect(Settings.vneInputs.at).toEqual({ altimeter: T0, alt: T0, oatF: T0 });
             pill.destroy(); panel.destroy();
             vi.setSystemTime(T0 + 50 * 3600000);
             build();
             expect(pillText()).toContain('· 59°F · 2d ago');
+        });
+
+        it('a single savedAt (v13.18 test build) still reads; a bad or string time reads "age ?"', () => {
+            Settings.vneInputs = { altimeter: '29.92', alt: '8000', oatF: '59', kias: '', savedAt: T0 - 20 * 60000 };
+            build();
+            expect(pillText()).toContain('· 20m ago');
+            pill.destroy(); panel.destroy();
+            Settings.vneInputs = { altimeter: '29.92', alt: '8000', oatF: '59', kias: '', at: { altimeter: '123', alt: NaN, oatF: T0 } };
+            build();
+            expect(pillText()).toContain('· age ?');
         });
 
         it('entries saved before the age existed (no savedAt) read "age ?"; a time in the future too', () => {
@@ -126,6 +173,7 @@ describe('what the pill shows', () => {
             expect(VnePill.ageText(at, at + 48 * 3600000)).toBe('2d ago');
             expect(VnePill.ageText(null)).toBe('age ?');
             expect(VnePill.ageText(at, at - 5000)).toBe('just now');
+            expect(VnePill.ageText(at + 2 * 60000, at)).toBe('age ?');   // clock moved back
         });
     });
 
