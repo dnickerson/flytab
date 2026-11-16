@@ -58,11 +58,44 @@ if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$PI_SSH" true 2>/dev/null; then
     exit 1
 fi
 
+# ── Stratux overlay? ───────────────────────────────────────────────────
+# With the Stratux overlay on, / is an overlay whose writable layer is RAM
+# (lowerdir=/overlay/robase, the SD card). Anything installed or enabled through
+# / is gone at the next power-up. Only /opt is bind-mounted from the SD card at
+# boot (flypi-persist.service), so the engine monitor code persists but a pip
+# install or a systemctl enable does not. Until 11-2026 websockets was installed
+# into RAM here, so after every power-up the WS endpoint was disabled and FlyTab
+# ran on its HTTP fallback (every flight since at least Feb 2026).
+OVERLAY=$(ssh "$PI_SSH" 'if [ "$(findmnt -n -o FSTYPE /)" != overlay ]; then echo no; elif mountpoint -q /overlay/robase; then echo yes; else echo unknown; fi')
+echo " Stratux overlay (RAM root): $OVERLAY"
+if [ "$OVERLAY" = unknown ]; then
+    echo "ERROR: / is an overlay but /overlay/robase (the SD card) is not mounted."
+    echo "       Anything this deploy installs would be lost at the next power-up."
+    echo "       Check the Pi's overlay setup before deploying."
+    exit 1
+fi
+
 # ── Install websockets (required for /ws/engine endpoint) ─────────────
 echo "[1] Ensuring Python websockets module is installed..."
 ssh "$PI_SSH" "sudo mount -o remount,rw /overlay/robase 2>/dev/null || true"
 ssh "$PI_SSH" "python3 -c 'import websockets' 2>/dev/null || sudo pip3 install websockets --break-system-packages 2>/dev/null || sudo pip3 install websockets"
-echo "    ✓ websockets installed"
+ssh "$PI_SSH" "python3 -c 'import websockets'" || { echo "ERROR: websockets did not install on the Pi"; exit 1; }
+echo "    ✓ websockets importable now"
+if [ "$OVERLAY" = yes ]; then
+    # Copy the installed package (and its dist-info) onto the SD card, then prove
+    # the SD card's own Python can import it, as it will after a power-up.
+    ssh "$PI_SSH" 'set -e
+        PKG=$(python3 -c "import websockets, os; print(os.path.dirname(websockets.__file__))")
+        SITE=$(dirname "$PKG")
+        sudo mkdir -p "/overlay/robase$SITE"
+        sudo rsync -a --delete "$PKG/" "/overlay/robase$PKG/"
+        for d in "$SITE"/websockets-*.dist-info; do
+            if [ -d "$d" ]; then sudo rsync -a --delete "$d/" "/overlay/robase$d/"; fi
+        done
+        sudo chroot /overlay/robase python3 -c "import websockets"' \
+        || { echo "ERROR: websockets is not importable from the SD card; the WS endpoint will be off after a power-up"; exit 1; }
+    echo "    ✓ websockets on the SD card (survives a power-up)"
+fi
 
 # ── Deploy engine monitor to /opt/engine-monitor/ ─────────────────────
 echo ""
@@ -94,7 +127,10 @@ ssh "$PI_SSH" "sudo mount -o remount,rw /overlay/robase 2>/dev/null || true"
 ssh "$PI_SSH" "cat > /tmp/engine-monitor.service << 'SVCEOF'
 [Unit]
 Description=Engine Monitor (FlyTab)
-After=network.target stratux.service
+# flypi-persist.service bind-mounts /opt from the SD card on an overlay Pi; starting
+# before it would write the flight log and CSVs into RAM. Ordering only: harmless
+# where that unit does not exist.
+After=network.target stratux.service flypi-persist.service
 
 [Service]
 Type=simple
@@ -119,6 +155,18 @@ ssh "$PI_SSH" "sudo systemctl stop flypi 2>/dev/null || true; sudo systemctl dis
 ssh "$PI_SSH" "sudo systemctl stop capture_v5 2>/dev/null || true; sudo systemctl disable capture_v5 2>/dev/null || true"
 echo "    ✓ flypi.service disabled"
 echo "    ✓ capture_v5.service disabled (replaced by engine-monitor)"
+if [ "$OVERLAY" = yes ]; then
+    # The enable/disable above lives in the RAM layer. The SD card's boot setup is
+    # left alone on purpose: it starts capture_v5 (ordered after the /opt bind
+    # mount), which runs the same code from /opt/capture_v5, synced in step [3].
+    BOOT_UNITS=$(ssh "$PI_SSH" "ls /overlay/robase/etc/systemd/system/multi-user.target.wants/ 2>/dev/null | grep -E 'engine-monitor|capture_v5|flypi' | tr '\n' ' '")
+    echo "    note: overlay Pi: these service changes last until the next power-up."
+    echo "          At power-up the SD card starts: ${BOOT_UNITS:-none}"
+    case " $BOOT_UNITS " in
+        *" capture_v5.service "*|*" engine-monitor.service "*) ;;
+        *) echo "    ⚠ No engine monitor service starts at power-up on this Pi" ;;
+    esac
+fi
 
 # ── Clean up unnecessary data ─────────────────────────────────────────
 if [ "$DO_CLEAN" = true ]; then
