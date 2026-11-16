@@ -193,7 +193,11 @@ class EngineClient extends EventTarget {
         }
 
         if (this._ws) {
-            this._ws.close();
+            // Detach first: the old socket's close event must not count as a failure
+            // of the new one or fire engine:disconnect (it would if it was open).
+            const old = this._ws;
+            old.onopen = old.onmessage = old.onclose = old.onerror = null;
+            old.close();
             this._ws = null;
         }
 
@@ -208,12 +212,13 @@ class EngineClient extends EventTarget {
         this._ws.onopen = () => {
             this._reconnectDelay = 2000;
             this._wsFailCount = 0;
-            // If we were in HTTP fallback, stop it — WS is back
-            if (this._useHttpFallback) {
-                this._useHttpFallback = false;
-                if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
-                if (this._wsRetryTimer) { clearInterval(this._wsRetryTimer); this._wsRetryTimer = null; }
-            }
+            // WS is back: stop the HTTP fallback and its 60 s WS retry. Not only when
+            // _useHttpFallback is set: the retry clears that flag before it reconnects,
+            // so a WS that comes back on a retry would otherwise leave the poll running
+            // and the retry timer closing this healthy socket every 60 s.
+            this._useHttpFallback = false;
+            if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+            if (this._wsRetryTimer) { clearInterval(this._wsRetryTimer); this._wsRetryTimer = null; }
             this._setConnected(true);
             this._startStaleCheck();
         };
@@ -290,7 +295,12 @@ class EngineClient extends EventTarget {
     }
 
     _scheduleReconnect() {
-        this._setConnected(false);
+        // While the HTTP poll runs it owns the connected state (_pollHttp sets it from
+        // each poll): a failed WS retry is not a lost Pi. Before 11-2026 every failed
+        // retry fired engine:disconnect while poll data kept arriving, so the fuel
+        // figure went UNCONFIRMED and the map engine box blanked every 30-60 s
+        // whenever the Pi's WS endpoint was down.
+        if (!this._pollTimer) this._setConnected(false);
         if (this._reconnectTimer) return;
         this._reconnectTimer = setTimeout(() => {
             this._reconnectTimer = null;
