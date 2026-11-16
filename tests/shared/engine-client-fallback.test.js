@@ -68,7 +68,7 @@ describe('Pi without its WS endpoint, HTTP answering', () => {
         const { ec, count } = makeClient();
         ec.connect();
         await vi.advanceTimersByTimeAsync(60_000);          // three WS failures -> HTTP fallback
-        expect(ec._useHttpFallback || ec._pollTimer).toBeTruthy();
+        expect(ec._pollTimer).toBeTruthy();                // polling (the fallback flag may be reset by a retry)
         expect(ec.connected).toBe(true);
         const from = Date.now();
         await vi.advanceTimersByTimeAsync(60 * 60_000);
@@ -125,7 +125,7 @@ describe('replacing a live socket', () => {
         await vi.advanceTimersByTimeAsync(100);
         expect(ec.connected).toBe(true);
         const from = Date.now();
-        ec.connect();                                        // e.g. a settings change reconnects
+        ec.connect();                                        // replace the live socket (as the retry/reconnect timers do)
         await vi.advanceTimersByTimeAsync(100);
         expect(count('engine:disconnect', from)).toBe(0);
         expect(ec._wsFailCount).toBe(0);
@@ -146,5 +146,70 @@ describe('replacing a live socket', () => {
         expect(count('engine:disconnect', from)).toBe(1);
         expect(ec.connected).toBe(false);
         ec.disconnect();
+    });
+});
+
+describe('review fixes', () => {
+    it('a poll in flight when the WS opens cannot mark the Pi gone afterwards', async () => {
+        const { ec, count } = makeClient();
+        ec.connect();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(ec._pollTimer).toBeTruthy();
+        // the next poll hangs and then fails (3 s timeout), while the WS opens meanwhile
+        let failPending;
+        global.fetch = vi.fn(() => new Promise((_, rej) => { failPending = () => rej(new Error('timeout')); }));
+        mode = 'accept';
+        await vi.advanceTimersByTimeAsync(61_000);          // retry opens the WS; a poll is pending
+        expect(sockets[sockets.length - 1].readyState).toBe(1);
+        expect(ec._pollTimer).toBeNull();
+        expect(failPending).toBeTypeOf('function');
+        const from = Date.now();
+        failPending();
+        await vi.advanceTimersByTimeAsync(10);
+        expect(count('engine:disconnect', from)).toBe(0);
+        expect(ec.connected).toBe(true);
+        expect(ec._staleTimer).toBeTruthy();
+        ec.disconnect();
+    });
+
+    it('WS frames restore connected if it was ever left false on an open socket', async () => {
+        mode = 'accept';
+        const { ec } = makeClient();
+        ec.connect();
+        await vi.advanceTimersByTimeAsync(100);
+        ec._setConnected(false);                             // whatever path left it false
+        sockets[0].onmessage({ data: JSON.stringify(FRAME) });
+        expect(ec.connected).toBe(true);
+        expect(ec._staleTimer).toBeTruthy();
+        ec.disconnect();
+    });
+
+    it('a reconnect pending when the WS opens does not replace the healthy socket', async () => {
+        const { ec } = makeClient();
+        ec.connect();
+        await vi.advanceTimersByTimeAsync(20);              // first attempt refused -> reconnect pending (2 s)
+        expect(ec._reconnectTimer).toBeTruthy();
+        mode = 'accept';
+        ec._doConnect();                                     // another path opens a socket first
+        await vi.advanceTimersByTimeAsync(20);
+        const live = sockets[sockets.length - 1];
+        expect(live.readyState).toBe(1);
+        expect(ec._reconnectTimer).toBeNull();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(live.readyState).toBe(1);
+        expect(sockets[sockets.length - 1]).toBe(live);
+        ec.disconnect();
+    });
+
+    it('disconnect() does not reconnect by itself', async () => {
+        mode = 'accept';
+        const { ec } = makeClient();
+        ec.connect();
+        await vi.advanceTimersByTimeAsync(100);
+        ec.disconnect();
+        const n = sockets.length;
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(sockets.length).toBe(n);
+        expect(ec.connected).toBe(false);
     });
 });

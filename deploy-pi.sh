@@ -66,8 +66,14 @@ fi
 # install or a systemctl enable does not. Until 11-2026 websockets was installed
 # into RAM here, so after every power-up the WS endpoint was disabled and FlyTab
 # ran on its HTTP fallback (every flight since at least Feb 2026).
-OVERLAY=$(ssh "$PI_SSH" '[ "$(findmnt -n -o FSTYPE /)" = overlay ] && mountpoint -q /overlay/robase && echo yes || echo no')
+OVERLAY=$(ssh "$PI_SSH" 'if [ "$(findmnt -n -o FSTYPE /)" != overlay ]; then echo no; elif mountpoint -q /overlay/robase; then echo yes; else echo unknown; fi')
 echo " Stratux overlay (RAM root): $OVERLAY"
+if [ "$OVERLAY" = unknown ]; then
+    echo "ERROR: / is an overlay but /overlay/robase (the SD card) is not mounted."
+    echo "       Anything this deploy installs would be lost at the next power-up."
+    echo "       Check the Pi's overlay setup before deploying."
+    exit 1
+fi
 
 # ── Install websockets (required for /ws/engine endpoint) ─────────────
 echo "[1] Ensuring Python websockets module is installed..."

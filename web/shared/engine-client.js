@@ -164,7 +164,10 @@ class EngineClient extends EventTarget {
 
     disconnect() {
         if (this._ws) {
-            this._ws.close();
+            // Detach first, or the socket's close event schedules a reconnect.
+            const old = this._ws;
+            old.onopen = old.onmessage = old.onclose = old.onerror = null;
+            old.close();
             this._ws = null;
         }
         if (this._reconnectTimer) {
@@ -219,6 +222,8 @@ class EngineClient extends EventTarget {
             this._useHttpFallback = false;
             if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
             if (this._wsRetryTimer) { clearInterval(this._wsRetryTimer); this._wsRetryTimer = null; }
+            // A reconnect still pending would replace this healthy socket.
+            if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
             this._setConnected(true);
             this._startStaleCheck();
         };
@@ -227,6 +232,12 @@ class EngineClient extends EventTarget {
             try {
                 const data = JSON.parse(e.data);
                 this._onData(data);
+                // Frames on an open socket mean the Pi is there, whatever an earlier
+                // late poll result said (_pollHttp ignores those, this is the backstop).
+                if (!this._connected) {
+                    this._setConnected(true);
+                    this._startStaleCheck();
+                }
             } catch { /* ignore malformed */ }
         };
 
@@ -283,13 +294,19 @@ class EngineClient extends EventTarget {
     }
 
     async _pollHttp() {
+        // A poll still in flight when the WS opens (onopen stops the poll timer) must
+        // not decide the connected state afterwards: a late failure would mark the
+        // Pi gone while WS frames arrive. Only results of the current polling run count.
+        const run = this._pollTimer;
         try {
             const resp = await fetch(`http://${this._ip}:${this._httpPort}/api/status`, { signal: AbortSignal.timeout(3000) });
             if (!resp.ok) throw new Error('bad status');
             const data = await resp.json();
+            if (!run || this._pollTimer !== run) return;
             this._onData(data);
             this._setConnected(true);
         } catch {
+            if (!run || this._pollTimer !== run) return;
             this._setConnected(false);
         }
     }
