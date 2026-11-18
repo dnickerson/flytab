@@ -153,16 +153,57 @@ describe('Oil tab sync', () => {
         expect(local()[0]._synced).toBe(true);
     });
 
-    it('deleted on flywhere.app: dropped here, unless the server list may be cut short (200)', () => {
+    it('nothing on the tablet is dropped because the server list lacks it', () => {
         const mine = [{ ...ev(uuid(5)), _synced: true }, ev(uuid(6))];      // synced, and one not sent yet
-        expect(Logbook.mergeOil(mine, [], { complete: true, tail: 'N194JT' }).map((e) => e.id)).toEqual([uuid(6)]);
-        expect(Logbook.mergeOil(mine, [], { complete: false, tail: 'N194JT' }).map((e) => e.id)).toEqual([uuid(5), uuid(6)]);
+        expect(Logbook.mergeOil(mine, []).map((e) => e.id)).toEqual([uuid(5), uuid(6)]);
     });
 
-    it('an old duplicate (same date, type and tach, different id) is not shown twice', () => {
+    it('server answers an empty list (a fault) -> the tablet keeps its whole oil log', async () => {
+        const srv = server([ev(uuid(1), { event_type: 'change', date: '2026-09-20' }), ev(uuid(2))]);
+        global.fetch = srv.fetch;
+        await makeLogbook()._renderOil();
+        global.fetch = server([]).fetch;
+        const lb = makeLogbook();
+        await lb._renderOil();
+        expect(local().map((e) => e.id).sort()).toEqual([uuid(1), uuid(2)]);
+        expect(lb._body.querySelectorAll('.logbook-entry')).toHaveLength(2);
+    });
+
+    it('the oil log as it was is saved once on the tablet before the first sync', async () => {
+        localStorage.setItem(KEY, JSON.stringify([TABLET_EVENT]));
+        global.fetch = server([ev(uuid(1))]).fetch;
+        await makeLogbook()._renderOil();
+        const bk = JSON.parse(localStorage.getItem('flytab_oil_events_before_sync'));
+        expect(JSON.parse(bk.events)).toEqual([TABLET_EVENT]);
+        await makeLogbook()._renderOil();                                  // not overwritten later
+        expect(JSON.parse(JSON.parse(localStorage.getItem('flytab_oil_events_before_sync')).events)).toEqual([TABLET_EVENT]);
+    });
+
+    it('an old entry identical to a server one (other id) is not shown twice; a new one is never matched', () => {
         const legacy = ev('oil-1700000000000', { date: '2026-03-18', tach_time: 1000 });
-        const srvCopy = ev(uuid(9), { date: '2026-03-18', tach_time: 1000 });
-        expect(Logbook.mergeOil([legacy], [srvCopy], { complete: true, tail: 'N194JT' }).map((e) => e.id)).toEqual([uuid(9)]);
+        const srvCopy = ev(uuid(9), { date: '2026-03-18', tach_time: '1000.0' });   // NUMERIC as text
+        expect(Logbook.mergeOil([legacy], [srvCopy], { legacy: [legacy.id] }).map((e) => e.id)).toEqual([uuid(9)]);
+        expect(Logbook.mergeOil([legacy], [srvCopy]).map((e) => e.id)).toEqual([uuid(9), legacy.id]);
+    });
+
+    it('a second identical quart the same day (no tach) is kept and sent', async () => {
+        const morning = ev(uuid(11), { date: '2026-11-20' });
+        const srv = server([morning]);
+        global.fetch = srv.fetch;
+        await makeLogbook()._renderOil();                                  // morning entry synced
+        setOnline(false);
+        const lb = makeLogbook();
+        lb._showOilForm(null);
+        lb._el.querySelector('[name="event_type"]').value = 'add';
+        lb._el.querySelector('[name="date"]').value = '2026-11-20';
+        lb._el.querySelector('[name="oil_quarts"]').value = '1';
+        lb._el.querySelector('.logbook-form-save').click();
+        await vi.waitFor(() => expect(local()).toHaveLength(2));
+        setOnline(true);
+        await makeLogbook()._renderOil();
+        expect(srv.store.size).toBe(2);
+        expect(local()).toHaveLength(2);
+        expect(local().every((e) => e._synced)).toBe(true);
     });
 
     it('delete a synced event offline -> gone here at once, deleted on the server at the next sync', async () => {
@@ -261,9 +302,19 @@ describe('Oil tab sync', () => {
         expect(Object.keys(saved).some((k) => k.startsWith('_'))).toBe(false);
     });
 
+    it('same date, type and tach but other details -> kept and sent, not thrown away', async () => {
+        localStorage.setItem(KEY, JSON.stringify([TABLET_EVENT]));
+        const webOther = ev(uuid(7), { date: '2026-11-17', tach_time: 1134.7, oil_brand: 'Phillips' });
+        const srv = server([webOther]);
+        global.fetch = srv.fetch;
+        await makeLogbook()._renderOil();
+        expect(srv.store.size).toBe(2);
+        expect(local().map((e) => e.oil_brand).sort()).toEqual(['Phillips', 'Phillips 20W-50 Victory']);
+    });
+
     it('the same entry already typed on flywhere.app is not sent again', async () => {
         localStorage.setItem(KEY, JSON.stringify([TABLET_EVENT]));
-        const webCopy = ev(uuid(7), { date: '2026-11-17', tach_time: 1134.7, oil_brand: 'Phillips' });
+        const webCopy = { ...TABLET_EVENT, id: uuid(7) };
         const srv = server([webCopy]);
         global.fetch = srv.fetch;
         await makeLogbook()._renderOil();
@@ -338,30 +389,31 @@ describe('Oil tab sync', () => {
         expect(local()).toEqual([]);
     });
 
-    it('saved while a sync runs -> sent by a second sync, not left for the next tab open', async () => {
+    it('saved while a sync is sending -> sent by a second sync, not left for the next tab open', async () => {
+        localStorage.setItem(KEY, JSON.stringify([TABLET_EVENT]));
         const srv = server();
-        let release;
+        let release, held = false;
         const gate = new Promise((r) => { release = r; });
         global.fetch = vi.fn(async (url, opts = {}) => {
-            if ((opts.method || 'GET') === 'GET' && !release.done) { release.done = true; await gate; }
+            if (opts.method === 'POST' && !held) { held = true; await gate; }   // the upload loop already has its list
             return srv.fetch(url, opts);
         });
         const lb = makeLogbook();
         const run = lb._renderOil();
-        await vi.waitFor(() => expect(global.fetch).toHaveBeenCalled());
+        await vi.waitFor(() => expect(held).toBe(true));
         lb._showOilForm(null);
         lb._el.querySelector('[name="oil_quarts"]').value = '2';
         lb._el.querySelector('.logbook-form-save').click();
         release();
         await run;
-        await vi.waitFor(() => expect(srv.store.size).toBe(1));
-        await vi.waitFor(() => expect(local()[0]?._synced).toBe(true));
+        expect(srv.store.size).toBe(2);                                    // sent within this tab open
+        expect(local().every((e) => e._synced)).toBe(true);
     });
 
     it('an unsent edit is kept over the server copy', () => {
         const edit = { ...ev(uuid(3), { oil_quarts: 2 }), _update: true };
         const srvCopy = ev(uuid(3), { oil_quarts: 1 });
-        expect(Logbook.mergeOil([edit], [srvCopy], { complete: true, tail: 'N194JT' })).toEqual([edit]);
+        expect(Logbook.mergeOil([edit], [srvCopy])).toEqual([edit]);
     });
 
     it('a damaged local copy does not break the tab', async () => {

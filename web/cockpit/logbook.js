@@ -1419,8 +1419,8 @@ class Logbook {
     static OIL_DELETES_KEY = 'flytab_oil_pending_deletes';
     // ms of the last successful download from the server
     static OIL_SYNCED_AT_KEY = 'flytab_oil_synced_at';
-    // GET /flights/oil returns at most this many (newest first): a shorter list is complete
-    static OIL_SERVER_LIMIT = 200;
+    // A copy of flypi_oil_events as it was before this tablet's first sync
+    static OIL_BACKUP_KEY = 'flytab_oil_events_before_sync';
 
     static _readJsonArray(key) {
         try {
@@ -1429,8 +1429,25 @@ class Logbook {
         } catch { return []; }
     }
 
-    /** Same oil event entered twice (before ids matched between tablet and server). */
-    static _oilSig(e) { return `${e.date}|${e.event_type}|${e.tach_time ?? ''}`; }
+    /** The same entry typed twice (tablet and flywhere.app): every field the pilot enters is equal. */
+    static _oilSame(a, b) {
+        const norm = (v) => {
+            if (v == null || v === '') return null;
+            if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+            return v;
+        };
+        return ['event_type', 'date', 'aircraft_id', 'tach_time', 'oil_quarts', 'oil_brand', 'oil_filter_changed', 'notes']
+            .every((k) => norm(a[k]) === norm(b[k]));
+    }
+
+    /** Ids in the copy saved before the first sync (OIL_BACKUP_KEY): entries made before it. */
+    static _oilLegacyIds() {
+        try {
+            const bk = JSON.parse(localStorage.getItem(Logbook.OIL_BACKUP_KEY) || 'null');
+            const events = JSON.parse(bk?.events || '[]');
+            return Array.isArray(events) ? events.map((e) => e && e.id).filter(Boolean) : [];
+        } catch { return []; }
+    }
 
     /** The fields the server stores, without the tablet's _ markers. */
     static _oilPayload(e) {
@@ -1438,26 +1455,29 @@ class Logbook {
     }
 
     /**
-     * The new local copy from the local one and the server's list for `tail`.
-     * The server's copy wins for events it has, and for an unsent event that is
-     * the same entry (date, type, tach: also typed on flywhere.app), except an
-     * unsent edit (_update) of it. Other unsent events are kept. A synced event
-     * of `tail` the server no longer has (deleted on flywhere.app) is dropped,
-     * but only when the server's list is complete; other aircraft's events are
-     * never dropped (the list holds only `tail`'s). `deleted`: ids deleted on
-     * the tablet and not yet on the server.
+     * The new local copy from the local one and the server's list. Nothing on
+     * the tablet is ever dropped because the server's list lacks it: an empty or
+     * cut-short answer (a server fault, more than 200 events, another owner)
+     * must not wipe the tablet's oil log. So an entry deleted on flywhere.app
+     * stays here until it is deleted here (DEL). The server's copy replaces the
+     * tablet's for events it has (same id); an unsent edit (_update) is kept
+     * over it. `legacy`: ids of entries made before this tablet's first sync
+     * (the server never had their ids): one identical field for field to a
+     * server entry was typed on both, and the server's copy is it. Entries
+     * saved since are matched by id only (the server keeps their UUID), so two
+     * identical entries of one day (a quart at each stop) stay two.
+     * `deleted`: ids deleted on the tablet and not yet on the server.
      */
-    static mergeOil(local, server, { complete, tail, deleted = [] }) {
+    static mergeOil(local, server, { deleted = [], legacy = [] } = {}) {
+        const old = new Set(legacy);
         const gone = new Set(deleted);
         const edits = new Map(local.filter((l) => l && l._update).map((l) => [l.id, l]));
         const ids = new Set(server.map((e) => e.id));
-        const sigs = new Set(server.map((e) => Logbook._oilSig(e)));
         const out = server.filter((e) => !gone.has(e.id))
             .map((e) => edits.get(e.id) || { ...e, _synced: true });
         for (const l of local) {
             if (!l || gone.has(l.id) || ids.has(l.id)) continue;
-            if (!l._update && sigs.has(Logbook._oilSig(l))) continue;
-            if (l._synced && complete && l.aircraft_id === tail) continue;
+            if (!l._synced && !l._update && old.has(l.id) && server.some((e) => Logbook._oilSame(l, e))) continue;
             out.push(l);
         }
         return out;
@@ -1471,9 +1491,14 @@ class Logbook {
     _syncOil() {
         if (this._oilSyncRun) return this._oilSyncRun;
         this._oilSyncRun = (async () => {
+            // Once, before any sync writes to it: the oil log as it was (also when
+            // empty: its ids are the entries made before this version, _oilLegacyIds)
+            if (localStorage.getItem(Logbook.OIL_BACKUP_KEY) == null) {
+                localStorage.setItem(Logbook.OIL_BACKUP_KEY, JSON.stringify({
+                    at: new Date().toISOString(), events: localStorage.getItem(Logbook.OIL_KEY) }));
+            }
             if (!navigator.onLine) return { ok: false, error: 'offline' };
-            // N00000 is CockpitConfig's fallback, not an aircraft: its list would
-            // be empty and the merge would drop this tablet's copy
+            // N00000 is CockpitConfig's fallback, not an aircraft: nothing to sync
             const tail = CockpitConfig.aircraft('tail');
             if (!tail || tail === 'N00000') return { ok: false, error: 'no aircraft tail set' };
             const base = Settings.workerBase;
@@ -1493,15 +1518,14 @@ class Logbook {
                 } catch (err) { error = error || err.message; }
             }
 
-            // The server's list first: an unsent event also typed on flywhere.app
-            // takes the server's copy instead of being sent a second time
+            // The server's list first: an entry from before the first sync that was
+            // also typed on flywhere.app takes the server's copy instead of being sent again
             try {
                 const data = await call(`${base}/flights/oil?aircraft_id=${encodeURIComponent(tail)}`);
                 const server = Array.isArray(data?.events) ? data.events : [];
                 const merged = Logbook.mergeOil(Logbook._readJsonArray(Logbook.OIL_KEY), server, {
-                    complete: server.length < Logbook.OIL_SERVER_LIMIT,
-                    tail,
                     deleted: Logbook._readJsonArray(Logbook.OIL_DELETES_KEY),
+                    legacy: Logbook._oilLegacyIds(),
                 });
                 localStorage.setItem(Logbook.OIL_KEY, JSON.stringify(merged));
                 localStorage.setItem(Logbook.OIL_SYNCED_AT_KEY, String(Date.now()));
