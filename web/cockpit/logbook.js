@@ -1407,50 +1407,149 @@ class Logbook {
     }
 
     // ========== Oil Tab ==========
+    //
+    // flypi_oil_events is the tablet's whole oil log: the server's events (marked
+    // _synced) plus ones not sent yet, so the tab works offline and in flight.
+    // Before 2026-11 the tablet could not reach /flights/oil at all (its CORS
+    // answer did not allow x-api-key): the tab showed only events entered on this
+    // tablet, and they never reached flywhere.app.
 
-    async _renderOil() {
-        this._body.innerHTML = '<div class="logbook-empty">Loading oil history...</div>';
-        const tail = CockpitConfig.aircraft('tail') || 'N00000';
+    static OIL_KEY = 'flypi_oil_events';
+    // Ids of synced events deleted on the tablet, still to delete on the server
+    static OIL_DELETES_KEY = 'flytab_oil_pending_deletes';
+    // ms of the last successful download from the server
+    static OIL_SYNCED_AT_KEY = 'flytab_oil_synced_at';
+    // GET /flights/oil returns at most this many (newest first): a shorter list is complete
+    static OIL_SERVER_LIMIT = 200;
 
-        // Try server first
-        let events = [];
+    static _readJsonArray(key) {
         try {
-            if (navigator.onLine) {
-                const workerBase = Settings.workerBase;
-                const resp = await fetch(`${workerBase}/flights/oil?aircraft_id=${tail}`, {
-                    headers: Settings.apiHeaders,
-                    signal: AbortSignal.timeout(5000),
-                });
-                if (resp.ok) {
-                    const data = await resp.json();
-                    events = data.events || [];
-                }
-            }
-        } catch { /* offline */ }
+            const v = JSON.parse(localStorage.getItem(key) || '[]');
+            return Array.isArray(v) ? v : [];
+        } catch { return []; }
+    }
 
-        // Also check local storage
-        const localOil = JSON.parse(localStorage.getItem('flypi_oil_events') || '[]');
-        if (events.length > 0) {
-            // Server data is authoritative — remove local entries that match server entries
-            // by id OR by content signature (date+type+tach), then append remaining offline-only entries
-            const serverIds = new Set(events.map(e => e.id));
-            const serverSigs = new Set(events.map(e => `${e.date}|${e.event_type}|${e.tach_time ?? ''}`));
-            const offlineOnly = localOil.filter(le =>
-                !serverIds.has(le.id) && !serverSigs.has(`${le.date}|${le.event_type}|${le.tach_time ?? ''}`)
-            );
-            // Reconcile: keep local store in sync with server (remove entries now on server)
-            if (offlineOnly.length !== localOil.length) {
-                localStorage.setItem('flypi_oil_events', JSON.stringify(offlineOnly));
-            }
-            events.push(...offlineOnly);
-        } else {
-            // Offline — show local only
-            events.push(...localOil);
+    /** Same oil event entered twice (before ids matched between tablet and server). */
+    static _oilSig(e) { return `${e.date}|${e.event_type}|${e.tach_time ?? ''}`; }
+
+    /** The fields the server stores, without the tablet's _ markers. */
+    static _oilPayload(e) {
+        return Object.fromEntries(Object.entries(e).filter(([k]) => !k.startsWith('_')));
+    }
+
+    /**
+     * The new local copy from the local one and the server's list. The server's
+     * copy wins for events it has; events not sent yet are kept; a synced event
+     * the server no longer has (deleted on flywhere.app) is dropped, but only
+     * when the server's list is complete. `deleted`: ids deleted on the tablet
+     * and not yet on the server.
+     */
+    static mergeOil(local, server, { complete, deleted = [] }) {
+        const gone = new Set(deleted);
+        const ids = new Set(server.map((e) => e.id));
+        const sigs = new Set(server.map((e) => Logbook._oilSig(e)));
+        const out = server.filter((e) => !gone.has(e.id)).map((e) => ({ ...e, _synced: true }));
+        for (const l of local) {
+            if (!l || gone.has(l.id)) continue;
+            if (ids.has(l.id) || sigs.has(Logbook._oilSig(l))) continue;
+            if (l._synced && complete) continue;
+            out.push(l);
         }
+        return out;
+    }
+
+    /**
+     * Sends deletions and new events, then downloads the server's list into the
+     * local copy. Resolves { ok, error }: error 'offline', or what failed. One
+     * run at a time.
+     */
+    _syncOil() {
+        if (this._oilSyncRun) return this._oilSyncRun;
+        this._oilSyncRun = (async () => {
+            if (!navigator.onLine) return { ok: false, error: 'offline' };
+            const base = Settings.workerBase;
+            const call = async (url, opts = {}) => {
+                const resp = await fetch(url, { ...opts, headers: Settings.apiHeaders, signal: AbortSignal.timeout(8000) });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return resp.json();
+            };
+            let error = null;
+
+            // Deletions made on the tablet
+            for (const id of Logbook._readJsonArray(Logbook.OIL_DELETES_KEY)) {
+                try {
+                    await call(`${base}/flights/oil?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+                    const left = Logbook._readJsonArray(Logbook.OIL_DELETES_KEY).filter((d) => d !== id);
+                    localStorage.setItem(Logbook.OIL_DELETES_KEY, JSON.stringify(left));
+                } catch (err) { error = error || err.message; }
+            }
+
+            // Events not on the server yet (new on the tablet, or edited: _update)
+            for (const e of Logbook._readJsonArray(Logbook.OIL_KEY).filter((x) => x && !x._synced)) {
+                try {
+                    const data = await call(`${base}/flights/oil`, {
+                        method: e._update ? 'PUT' : 'POST',
+                        body: JSON.stringify(Logbook._oilPayload(e)),
+                    });
+                    if (data?.event) {
+                        // The pilot may have saved or deleted meanwhile: work on a fresh read
+                        const fresh = Logbook._readJsonArray(Logbook.OIL_KEY)
+                            .map((x) => (x.id === e.id ? { ...data.event, _synced: true } : x));
+                        localStorage.setItem(Logbook.OIL_KEY, JSON.stringify(fresh));
+                    }
+                } catch (err) { error = error || err.message; }
+            }
+
+            // The server's list
+            try {
+                const tail = CockpitConfig.aircraft('tail') || 'N00000';
+                const data = await call(`${base}/flights/oil?aircraft_id=${encodeURIComponent(tail)}`);
+                const server = Array.isArray(data?.events) ? data.events : [];
+                const merged = Logbook.mergeOil(Logbook._readJsonArray(Logbook.OIL_KEY), server, {
+                    complete: server.length < Logbook.OIL_SERVER_LIMIT,
+                    deleted: Logbook._readJsonArray(Logbook.OIL_DELETES_KEY),
+                });
+                localStorage.setItem(Logbook.OIL_KEY, JSON.stringify(merged));
+                localStorage.setItem(Logbook.OIL_SYNCED_AT_KEY, String(Date.now()));
+            } catch (err) { error = error || err.message; }
+
+            return { ok: !error, error };
+        })().catch((err) => ({ ok: false, error: err?.message || String(err) }))
+            .finally(() => { this._oilSyncRun = null; });
+        return this._oilSyncRun;
+    }
+
+    /** Draws the saved oil log at once, then syncs and draws again if still on the Oil tab. */
+    async _renderOil() {
+        this._paintOil();
+        this._oilStatus = await this._syncOil();
+        if (this._activeTab === 'oil') this._paintOil();
+    }
+
+    /** One line on where the shown log comes from, or '' when it is up to date. */
+    _oilStatusLine(events) {
+        const parts = [];
+        const st = this._oilStatus;
+        if (st && !st.ok) {
+            const at = Number(localStorage.getItem(Logbook.OIL_SYNCED_AT_KEY)) || 0;
+            const when = at ? `last updated ${new Date(at).toLocaleString()}` : 'never updated from flywhere.app';
+            parts.push(st.error === 'offline'
+                ? `Offline — oil log saved on this tablet (${when})`
+                : `Not updated from flywhere.app (${st.error}) — oil log saved on this tablet (${when})`);
+        }
+        const unsent = events.filter((e) => !e._synced).length;
+        if (unsent) parts.push(`${unsent} not sent to flywhere.app yet`);
+        return parts.join(' · ');
+    }
+
+    _paintOil() {
+        const events = Logbook._readJsonArray(Logbook.OIL_KEY).filter(Boolean);
         events.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        const status = this._oilStatusLine(events);
+        const statusHtml = status ? `<div class="lb-oil-status">${this._escHtml(status)}</div>` : '';
 
         if (events.length === 0) {
-            this._body.innerHTML = `<div class="logbook-empty">
+            this._body.innerHTML = `${statusHtml}<div class="logbook-empty">
                 No oil events recorded.<br>Tap <b>+ OIL</b> to log an oil change or addition.
             </div>`;
             return;
@@ -1462,16 +1561,14 @@ class Logbook {
             ? events.filter(e => e.event_type === 'add' && (e.date || '') > (lastChange.date || ''))
             : [];
         const qtAdded = addsSinceChange.reduce((s, e) => s + (e.oil_quarts || 0), 0);
+        const esc = (v) => this._escHtml(v == null ? '' : String(v));
 
-        let html = '';
+        let html = statusHtml;
         if (lastChange) {
-            const tachSince = lastChange.tach_time
-                ? `Tach at change: ${lastChange.tach_time}`
-                : '';
             html += `<div class="lb-oil-summary">
                 <div class="lb-oil-summary-title">Since Last Oil Change</div>
-                <div class="lb-currency-row"><span>Date</span><span>${lastChange.date}</span></div>
-                ${tachSince ? `<div class="lb-currency-row"><span>Tach Time</span><span>${lastChange.tach_time}</span></div>` : ''}
+                <div class="lb-currency-row"><span>Date</span><span>${esc(lastChange.date)}</span></div>
+                ${lastChange.tach_time ? `<div class="lb-currency-row"><span>Tach Time</span><span>${esc(lastChange.tach_time)}</span></div>` : ''}
                 <div class="lb-currency-row"><span>Oil Added Since</span><span>${qtAdded.toFixed(1)} qt</span></div>
                 ${lastChange.oil_filter_changed ? '<div class="lb-currency-row"><span>Filter</span><span>Changed</span></div>' : ''}
             </div>`;
@@ -1479,17 +1576,16 @@ class Logbook {
 
         html += '<div class="lb-oil-history">';
         html += events.map(e => {
-            const icon = e.event_type === 'change' ? '\u{1F6E2}\uFE0F' : '+';
             const label = e.event_type === 'change' ? 'OIL CHANGE' : 'OIL ADDED';
-            const qty = e.oil_quarts ? `${e.oil_quarts} qt` : '';
-            const tach = e.tach_time ? `Tach: ${e.tach_time}` : '';
+            const qty = e.oil_quarts ? `${esc(e.oil_quarts)} qt` : '';
+            const tach = e.tach_time ? `Tach: ${esc(e.tach_time)}` : '';
             const filter = e.oil_filter_changed ? ' + filter' : '';
-            const brand = e.oil_brand || '';
+            const brand = esc(e.oil_brand || '');
             const notes = e.notes || '';
 
-            return `<div class="logbook-entry" data-id="${e.id}">
+            return `<div class="logbook-entry" data-id="${esc(e.id)}">
                 <div class="logbook-entry-header">
-                    <span class="logbook-date">${e.date}</span>
+                    <span class="logbook-date">${esc(e.date)}</span>
                     <span class="logbook-route">${label}</span>
                 </div>
                 <div class="logbook-entry-details">
@@ -1499,7 +1595,7 @@ class Logbook {
                 </div>
                 ${notes ? `<div class="logbook-entry-details"><span>${this._escHtml(notes)}</span></div>` : ''}
                 <div class="logbook-entry-actions">
-                    <button class="logbook-btn logbook-delete-btn" data-id="${e.id}">DEL</button>
+                    <button class="logbook-btn logbook-delete-btn" data-id="${esc(e.id)}">DEL</button>
                 </div>
             </div>`;
         }).join('');
@@ -1755,42 +1851,14 @@ class Logbook {
                     notes: val('notes') || null,
                 };
 
-                // Save locally
-                const localOil = JSON.parse(localStorage.getItem('flypi_oil_events') || '[]');
+                // Save locally; _syncOil (from _renderOil) sends it when online. An
+                // edit of an event the server has goes as a PUT.
+                if (existing?._synced || existing?._update) event._update = true;
+                const localOil = Logbook._readJsonArray(Logbook.OIL_KEY);
                 const idx = localOil.findIndex(e => e.id === event.id);
                 if (idx >= 0) localOil[idx] = event;
                 else localOil.push(event);
-                localStorage.setItem('flypi_oil_events', JSON.stringify(localOil));
-
-                // Sync to server
-                if (navigator.onLine) {
-                    try {
-                        const workerBase = Settings.workerBase;
-                        const syncResp = await fetch(`${workerBase}/flights/oil`, {
-                            method: 'POST',
-                            headers: Settings.apiHeaders,
-                            body: JSON.stringify(event),
-                            signal: AbortSignal.timeout(5000),
-                        });
-                        if (syncResp.ok) {
-                            // Replace local entry with server's authoritative record (may have server-assigned id)
-                            const syncData = await syncResp.json();
-                            if (syncData.event) {
-                                const fresh = JSON.parse(localStorage.getItem('flypi_oil_events') || '[]');
-                                const replaced = fresh.map(e => e.id === event.id ? syncData.event : e);
-                                // Remove old local-id entry if server used a different id
-                                const dedupedIds = new Set();
-                                const deduped = replaced.filter(e => {
-                                    const key = e.date + '|' + e.event_type + '|' + (e.tach_time || '');
-                                    if (dedupedIds.has(key)) return false;
-                                    dedupedIds.add(key);
-                                    return true;
-                                });
-                                localStorage.setItem('flypi_oil_events', JSON.stringify(deduped));
-                            }
-                        }
-                    } catch { /* will retry later */ }
-                }
+                localStorage.setItem(Logbook.OIL_KEY, JSON.stringify(localOil));
 
                 overlay.remove();
                 this._renderOil();
@@ -1802,21 +1870,18 @@ class Logbook {
         });
     }
 
+    /** Removes it here; one the server has is deleted there by the next _syncOil. */
     async _deleteOilEvent(id) {
-        // Remove locally
-        const localOil = JSON.parse(localStorage.getItem('flypi_oil_events') || '[]');
-        localStorage.setItem('flypi_oil_events', JSON.stringify(localOil.filter(e => e.id !== id)));
-
-        // Delete on server
-        if (navigator.onLine) {
-            try {
-                const workerBase = Settings.workerBase;
-                await fetch(`${workerBase}/flights/oil?id=${id}`, {
-                    method: 'DELETE',
-                    headers: Settings.apiHeaders,
-                    signal: AbortSignal.timeout(5000),
-                });
-            } catch { /* best effort */ }
+        const localOil = Logbook._readJsonArray(Logbook.OIL_KEY);
+        const ev = localOil.find(e => e && e.id === id);
+        localStorage.setItem(Logbook.OIL_KEY, JSON.stringify(localOil.filter(e => e && e.id !== id)));
+        // Synced, or maybe being sent right now (a running sync's POST would
+        // bring it back with the next download). Server ids are UUIDs.
+        const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id || '');
+        if (ev?._synced || (ev && this._oilSyncRun && uuid)) {
+            const pending = Logbook._readJsonArray(Logbook.OIL_DELETES_KEY);
+            if (!pending.includes(id)) pending.push(id);
+            localStorage.setItem(Logbook.OIL_DELETES_KEY, JSON.stringify(pending));
         }
     }
 

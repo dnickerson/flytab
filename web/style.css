@@ -5233,6 +5233,10 @@ body {
     background: var(--bg-surface); border: 1px solid var(--accent);
     border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;
 }
+.lb-oil-status {
+    font-size: 16px; font-weight: 800; color: var(--color-caution-on-light);
+    margin-bottom: 10px;
+}
 .lb-oil-summary-title {
     font-size: 13px; font-weight: 700; color: var(--accent);
     text-transform: uppercase; letter-spacing: 1px;
