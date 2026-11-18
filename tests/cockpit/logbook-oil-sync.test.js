@@ -35,7 +35,15 @@ const ev = (id, over = {}) => ({ id, event_type: 'add', date: '2026-10-01', airc
     oil_quarts: 1, oil_brand: null, oil_filter_changed: false, notes: null, ...over });
 const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-/** flywhere's oil route, in memory. `fail`: method -> HTTP status, or 'cors' for a blocked request. */
+/**
+ * flywhere's oil route (app/api/flights/oil/route.ts), in memory. GET: the
+ * owner's events for ?aircraft_id, newest first, at most 200. POST: keeps the
+ * client id only if it is a UUID (else a new one); an id it already has is a
+ * 500 (primary key). DELETE: 200 even for an id it doesn't have.
+ * `fail`: method -> HTTP status, or 'cors' for a blocked request.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+let newIds = 0;
 function server(events = [], { fail = {} } = {}) {
     const store = new Map(events.map((e) => [e.id, { ...e }]));
     const calls = [];
@@ -45,12 +53,25 @@ function server(events = [], { fail = {} } = {}) {
         if (fail[m] === 'cors') throw new TypeError('Failed to fetch');
         if (fail[m]) return { ok: false, status: fail[m], json: async () => ({ error: 'x' }) };
         const u = new URL(url);
-        if (m === 'GET') return { ok: true, status: 200, json: async () => ({ events: [...store.values()] }) };
-        if (m === 'POST' || m === 'PUT') {
+        if (m === 'GET') {
+            const tail = u.searchParams.get('aircraft_id');
+            const list = [...store.values()].filter((e) => !tail || e.aircraft_id === tail)
+                .sort((x, y) => (y.date || '').localeCompare(x.date || '')).slice(0, 200);
+            return { ok: true, status: 200, json: async () => ({ events: list }) };
+        }
+        if (m === 'POST') {
             const b = JSON.parse(opts.body);
-            const row = { ...b, owner_handle: 'dana' };
-            store.set(row.id, row);
-            return { ok: true, status: m === 'POST' ? 201 : 200, json: async () => ({ event: row }) };
+            const id = b.id && UUID_RE.test(b.id) ? b.id : `ffffffff-0000-4000-8000-${String(++newIds).padStart(12, '0')}`;
+            if (store.has(id)) return { ok: false, status: 500, json: async () => ({ error: 'duplicate key' }) };
+            const row = { ...b, id, owner_handle: 'dana' };
+            store.set(id, row);
+            return { ok: true, status: 201, json: async () => ({ event: row }) };
+        }
+        if (m === 'PUT') {
+            const b = JSON.parse(opts.body);
+            if (!store.has(b.id)) return { ok: false, status: 500, json: async () => ({ error: 'no row' }) };
+            store.set(b.id, { ...store.get(b.id), ...b });
+            return { ok: true, status: 200, json: async () => ({ event: store.get(b.id) }) };
         }
         if (m === 'DELETE') { store.delete(u.searchParams.get('id')); return { ok: true, status: 200, json: async () => ({ deleted: true }) }; }
     });
@@ -134,14 +155,14 @@ describe('Oil tab sync', () => {
 
     it('deleted on flywhere.app: dropped here, unless the server list may be cut short (200)', () => {
         const mine = [{ ...ev(uuid(5)), _synced: true }, ev(uuid(6))];      // synced, and one not sent yet
-        expect(Logbook.mergeOil(mine, [], { complete: true }).map((e) => e.id)).toEqual([uuid(6)]);
-        expect(Logbook.mergeOil(mine, [], { complete: false }).map((e) => e.id)).toEqual([uuid(5), uuid(6)]);
+        expect(Logbook.mergeOil(mine, [], { complete: true, tail: 'N194JT' }).map((e) => e.id)).toEqual([uuid(6)]);
+        expect(Logbook.mergeOil(mine, [], { complete: false, tail: 'N194JT' }).map((e) => e.id)).toEqual([uuid(5), uuid(6)]);
     });
 
     it('an old duplicate (same date, type and tach, different id) is not shown twice', () => {
         const legacy = ev('oil-1700000000000', { date: '2026-03-18', tach_time: 1000 });
         const srvCopy = ev(uuid(9), { date: '2026-03-18', tach_time: 1000 });
-        expect(Logbook.mergeOil([legacy], [srvCopy], { complete: true }).map((e) => e.id)).toEqual([uuid(9)]);
+        expect(Logbook.mergeOil([legacy], [srvCopy], { complete: true, tail: 'N194JT' }).map((e) => e.id)).toEqual([uuid(9)]);
     });
 
     it('delete a synced event offline -> gone here at once, deleted on the server at the next sync', async () => {
@@ -238,6 +259,109 @@ describe('Oil tab sync', () => {
         const saved = [...srv.store.values()][0];
         expect(saved).toMatchObject({ event_type: 'change', tach_time: 1140.3, oil_quarts: 6, oil_filter_changed: true });
         expect(Object.keys(saved).some((k) => k.startsWith('_'))).toBe(false);
+    });
+
+    it('the same entry already typed on flywhere.app is not sent again', async () => {
+        localStorage.setItem(KEY, JSON.stringify([TABLET_EVENT]));
+        const webCopy = ev(uuid(7), { date: '2026-11-17', tach_time: 1134.7, oil_brand: 'Phillips' });
+        const srv = server([webCopy]);
+        global.fetch = srv.fetch;
+        await makeLogbook()._renderOil();
+        expect(srv.calls.filter((c) => c.m === 'POST')).toHaveLength(0);
+        expect(srv.store.size).toBe(1);
+        expect(local()).toEqual([{ ...webCopy, _synced: true }]);
+    });
+
+    it('download fails -> nothing is sent (it could be a duplicate)', async () => {
+        localStorage.setItem(KEY, JSON.stringify([TABLET_EVENT]));
+        const srv = server([], { fail: { GET: 503 } });
+        global.fetch = srv.fetch;
+        const lb = makeLogbook();
+        await lb._renderOil();
+        expect(srv.calls.filter((c) => c.m === 'POST')).toHaveLength(0);
+        expect(text(lb)).toContain('Not updated from flywhere.app (HTTP 503)');
+    });
+
+    it("another aircraft's events stay on the tablet after they are synced", async () => {
+        const other = ev(uuid(8), { aircraft_id: 'N12345', date: '2026-08-01' });
+        localStorage.setItem(KEY, JSON.stringify([other]));
+        const srv = server();
+        global.fetch = srv.fetch;
+        await makeLogbook()._renderOil();
+        await makeLogbook()._renderOil();
+        expect(srv.store.has(uuid(8))).toBe(true);
+        expect(local()).toEqual([{ ...other, owner_handle: 'dana', _synced: true }]);
+    });
+
+    it('no aircraft tail (the N00000 fallback) -> no sync, the local copy untouched', async () => {
+        const saved = global.CockpitConfig;
+        global.CockpitConfig = { get: () => ({}), aircraft: () => 'N00000' };
+        try {
+            localStorage.setItem(KEY, JSON.stringify([{ ...ev(uuid(1)), _synced: true }]));
+            global.fetch = vi.fn();
+            const lb = makeLogbook();
+            await lb._renderOil();
+            expect(global.fetch).not.toHaveBeenCalled();
+            expect(local()).toHaveLength(1);
+            expect(text(lb)).toContain('no aircraft tail set');
+        } finally { global.CockpitConfig = saved; }
+    });
+
+    it('legacy non-UUID id -> the server gives it an id; one row, synced', async () => {
+        localStorage.setItem(KEY, JSON.stringify([ev('oil-1700000000000', { date: '2026-05-02' })]));
+        const srv = server();
+        global.fetch = srv.fetch;
+        await makeLogbook()._renderOil();
+        await makeLogbook()._renderOil();
+        expect(srv.store.size).toBe(1);
+        expect(local()).toHaveLength(1);
+        expect(local()[0]).toMatchObject({ _synced: true, date: '2026-05-02' });
+        expect(UUID_RE.test(local()[0].id)).toBe(true);
+    });
+
+    it('POST answer lost, then deleted before the next sync -> deleted on the server too', async () => {
+        localStorage.setItem(KEY, JSON.stringify([TABLET_EVENT]));
+        const srv = server();
+        global.fetch = vi.fn(async (url, opts = {}) => {
+            const r = await srv.fetch(url, opts);
+            if (opts.method === 'POST') throw new Error('signal timed out');    // stored, answer lost
+            return r;
+        });
+        const lb = makeLogbook();
+        await lb._renderOil();
+        expect(srv.store.has(TABLET_EVENT.id)).toBe(true);
+        expect(local()[0]._synced).toBeUndefined();
+        await lb._deleteOilEvent(TABLET_EVENT.id);
+        global.fetch = srv.fetch;
+        await lb._renderOil();
+        expect(srv.store.has(TABLET_EVENT.id)).toBe(false);
+        expect(local()).toEqual([]);
+    });
+
+    it('saved while a sync runs -> sent by a second sync, not left for the next tab open', async () => {
+        const srv = server();
+        let release;
+        const gate = new Promise((r) => { release = r; });
+        global.fetch = vi.fn(async (url, opts = {}) => {
+            if ((opts.method || 'GET') === 'GET' && !release.done) { release.done = true; await gate; }
+            return srv.fetch(url, opts);
+        });
+        const lb = makeLogbook();
+        const run = lb._renderOil();
+        await vi.waitFor(() => expect(global.fetch).toHaveBeenCalled());
+        lb._showOilForm(null);
+        lb._el.querySelector('[name="oil_quarts"]').value = '2';
+        lb._el.querySelector('.logbook-form-save').click();
+        release();
+        await run;
+        await vi.waitFor(() => expect(srv.store.size).toBe(1));
+        await vi.waitFor(() => expect(local()[0]?._synced).toBe(true));
+    });
+
+    it('an unsent edit is kept over the server copy', () => {
+        const edit = { ...ev(uuid(3), { oil_quarts: 2 }), _update: true };
+        const srvCopy = ev(uuid(3), { oil_quarts: 1 });
+        expect(Logbook.mergeOil([edit], [srvCopy], { complete: true, tail: 'N194JT' })).toEqual([edit]);
     });
 
     it('a damaged local copy does not break the tab', async () => {
