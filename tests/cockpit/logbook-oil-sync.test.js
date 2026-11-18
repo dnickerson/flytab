@@ -186,6 +186,26 @@ describe('Oil tab sync', () => {
         expect(Logbook.mergeOil([legacy], [srvCopy]).map((e) => e.id)).toEqual([uuid(9), legacy.id]);
     });
 
+    it('two identical old entries and one identical web copy -> one matches, the other is kept and sent', async () => {
+        const a = ev('oil-1700000000001', { date: '2026-04-02' });
+        const b = ev('oil-1700000000002', { date: '2026-04-02' });
+        const webCopy = ev(uuid(12), { date: '2026-04-02' });
+        expect(Logbook.mergeOil([a, b], [webCopy], { legacy: [a.id, b.id] }).map((e) => e.id)).toEqual([uuid(12), b.id]);
+        localStorage.setItem(KEY, JSON.stringify([a, b]));
+        const srv = server([webCopy]);
+        global.fetch = srv.fetch;
+        await makeLogbook()._renderOil();
+        expect(srv.store.size).toBe(2);
+        expect(local()).toHaveLength(2);
+    });
+
+    it("an old entry never matches the server copy that is already another tablet entry's", () => {
+        const synced = { ...ev(uuid(13), { date: '2026-04-03' }), _synced: true };
+        const old = ev('oil-1700000000003', { date: '2026-04-03' });
+        const srvCopy = ev(uuid(13), { date: '2026-04-03' });
+        expect(Logbook.mergeOil([synced, old], [srvCopy], { legacy: [old.id] }).map((e) => e.id)).toEqual([uuid(13), old.id]);
+    });
+
     it('a second identical quart the same day (no tach) is kept and sent', async () => {
         const morning = ev(uuid(11), { date: '2026-11-20' });
         const srv = server([morning]);

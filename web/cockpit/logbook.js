@@ -1475,9 +1475,16 @@ class Logbook {
         const ids = new Set(server.map((e) => e.id));
         const out = server.filter((e) => !gone.has(e.id))
             .map((e) => edits.get(e.id) || { ...e, _synced: true });
+        // A server entry stands for one tablet entry at most: the one with its id,
+        // else one old entry identical to it (two identical old entries and one
+        // web copy: the second is kept, and sent)
+        const used = new Set(local.filter((l) => l && ids.has(l.id)).map((l) => l.id));
         for (const l of local) {
             if (!l || gone.has(l.id) || ids.has(l.id)) continue;
-            if (!l._synced && !l._update && old.has(l.id) && server.some((e) => Logbook._oilSame(l, e))) continue;
+            if (!l._synced && !l._update && old.has(l.id)) {
+                const twin = server.find((e) => !used.has(e.id) && !gone.has(e.id) && Logbook._oilSame(l, e));
+                if (twin) { used.add(twin.id); continue; }
+            }
             out.push(l);
         }
         return out;
