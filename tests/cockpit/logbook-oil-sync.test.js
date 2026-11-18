@@ -436,6 +436,28 @@ describe('Oil tab sync', () => {
         expect(Logbook.mergeOil([edit], [srvCopy])).toEqual([edit]);
     });
 
+    it('saved oil log unreadable -> no sync writes over it (the raw text stays)', async () => {
+        localStorage.setItem(KEY, '{not json');
+        const srv = server([ev(uuid(1))]);
+        global.fetch = srv.fetch;
+        const lb = makeLogbook();
+        await lb._renderOil();
+        expect(localStorage.getItem(KEY)).toBe('{not json');
+        expect(srv.calls.filter((c) => c.m !== 'GET')).toHaveLength(0);
+        expect(text(lb)).toContain('saved oil log unreadable');
+    });
+
+    it('quarts that come back as text are still added up', async () => {
+        global.fetch = server([
+            ev(uuid(1), { event_type: 'change', date: '2026-09-20', oil_quarts: '6.0' }),
+            ev(uuid(2), { date: '2026-10-01', oil_quarts: '1.0' }),
+            ev(uuid(3), { date: '2026-10-05', oil_quarts: '0.5' }),
+        ]).fetch;
+        const lb = makeLogbook();
+        await lb._renderOil();
+        expect(text(lb)).toContain('Oil Added Since1.5 qt');
+    });
+
     it('a damaged local copy does not break the tab', async () => {
         localStorage.setItem(KEY, '{not json');
         setOnline(false);

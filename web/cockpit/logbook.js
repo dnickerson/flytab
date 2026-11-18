@@ -1504,6 +1504,14 @@ class Logbook {
                 localStorage.setItem(Logbook.OIL_BACKUP_KEY, JSON.stringify({
                     at: new Date().toISOString(), events: localStorage.getItem(Logbook.OIL_KEY) }));
             }
+            // A saved log this code can't read is left exactly as it is: every
+            // write below would replace it with what it could read ([])
+            const raw = localStorage.getItem(Logbook.OIL_KEY);
+            if (raw != null) {
+                let parsed;
+                try { parsed = JSON.parse(raw); } catch { parsed = null; }
+                if (!Array.isArray(parsed)) return { ok: false, error: 'saved oil log unreadable — not synced' };
+            }
             if (!navigator.onLine) return { ok: false, error: 'offline' };
             // N00000 is CockpitConfig's fallback, not an aircraft: nothing to sync
             const tail = CockpitConfig.aircraft('tail');
@@ -1608,7 +1616,8 @@ class Logbook {
         const addsSinceChange = lastChange
             ? events.filter(e => e.event_type === 'add' && (e.date || '') > (lastChange.date || ''))
             : [];
-        const qtAdded = addsSinceChange.reduce((s, e) => s + (e.oil_quarts || 0), 0);
+        // Number(): the server's NUMERIC may come back as text
+        const qtAdded = addsSinceChange.reduce((s, e) => s + (Number(e.oil_quarts) || 0), 0);
         const esc = (v) => this._escHtml(v == null ? '' : String(v));
 
         let html = statusHtml;
